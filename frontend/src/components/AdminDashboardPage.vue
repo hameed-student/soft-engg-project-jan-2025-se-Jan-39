@@ -2,27 +2,27 @@
   <div class="body">
     <NavBar @fetchData="fetchData"/>
     <div class="container">
-      <h2>Welcome Admin!</h2>
+      <h3>Welcome Admin</h3>
 
       <!-- Pending Support Staff Approvals -->
-      <div v-if="pendingApprovals.length != 0" class="card mt-6">
-        <h2 class="text-2xl font-bold">Pending Support Staff Approvals</h2>
-        <div class="overflow-x-auto">
-          <table class="w-[90%] mx-auto border-collapse border border-gray-300">
-            <thead class="bg-gray-100">
+      <div v-if="pendingApprovals.length != 0" class="box">
+        <h1>Pending Support Staff Approvals</h1>
+        <div class="table-container">
+          <table class="styled-table" >
+            <thead>
               <tr>
-                <th class="border border-gray-300 px-4 py-2">Name</th>
-                <th class="border border-gray-300 px-4 py-2">Email</th>
-                <th class="border border-gray-300 px-4 py-2">Course</th>
-                <th class="border border-gray-300 px-4 py-2">Actions</th>
+                <th  >Name</th>
+                <th  >Email</th>
+                <th  >Course</th>
+                <th  >Actions</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="staff in pendingApprovals" :key="staff.staff_id" class="hover:bg-gray-50">
-                <td class="border border-gray-300 px-4 py-2">{{ staff.staff_name }}</td>
-                <td class="border border-gray-300 px-4 py-2">{{ staff.staff_email }}</td>
-                <td class="border border-gray-300 px-4 py-2">{{ staff.course_name }}</td>
-                <td class="border border-gray-300 px-4 py-2">
+                <td   >{{ staff.staff_name }}</td>
+                <td   >{{ staff.staff_email }}</td>
+                <td   >{{ staff.course_name }}</td>
+                <td   >
                   <button @click="manageApprovals(staff.staff_id, staff.course_id, 'approve')" class="button">Approve</button>
                   <button @click="manageApprovals(staff.staff_id, staff.course_id, 'reject')" class="button">Reject</button>
                 </td>
@@ -33,25 +33,26 @@
         </div>
       </div>
       <p v-else style="color: black;background-color: white;border-radius: 10px;padding: 10px;margin-top: 20px;">No approvals pending for support staff.</p>
+      <br><br><br>
       <!-- Pending Student Enrollment Approvals -->
-      <div v-if="pendingEnrollments.length != 0" class="card mt-6">
-        <h2 class="text-2xl font-bold">Pending Student Enrollment Approvals</h2>
-        <div class="overflow-x-auto">
-          <table class="w-[90%] mx-auto border-collapse border border-gray-300">
-            <thead class="bg-gray-100">
+      <div v-if="pendingEnrollments.length != 0" class="box">
+        <h1>Pending Student Enrollment Approvals</h1>
+        <div class="table-container">
+          <table class="styled-table">
+            <thead  >
               <tr>
-                <th class="border border-gray-300 px-4 py-2">Name</th>
-                <th class="border border-gray-300 px-4 py-2">Email</th>
-                <th class="border border-gray-300 px-4 py-2">Course</th>
-                <th class="border border-gray-300 px-4 py-2">Actions</th>
+                <th    >Name</th>
+                <th    >Email</th>
+                <th    >Course</th>
+                <th    >Actions</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="enrollment in pendingEnrollments" :key="enrollment.student_id" class="hover:bg-gray-50">
-                <td class="border border-gray-300 px-4 py-2">{{ enrollment.student_name }}</td>
-                <td class="border border-gray-300 px-4 py-2">{{ enrollment.student_email }}</td>
-                <td class="border border-gray-300 px-4 py-2">{{ enrollment.course_name }}</td>
-                <td class="border border-gray-300 px-4 py-2">
+              <tr v-for="enrollment in pendingEnrollments" :key="enrollment.student_id"  >
+                <td    >{{ enrollment.student_name }}</td>
+                <td    >{{ enrollment.student_email }}</td>
+                <td    >{{ enrollment.course_name }}</td>
+                <td    >
                   <button @click="manageEnrollments(enrollment.student_id, enrollment.course_id, 'approve')" class="button">Approve</button>
                   <button @click="manageEnrollments(enrollment.student_id, enrollment.course_id, 'reject')" class="button">Reject</button>
                 </td>
@@ -62,13 +63,56 @@
         </div>
       </div>
       <p v-else style="color: black;background-color: white;border-radius: 10px;padding: 10px;margin-top: 20px;">No approvals pending for student enrollments.</p>
+      <br><br><br>
+      <!--app stats-->
+      
+      <div class="box">
+        <h1>Dashboard Overview</h1>
+        <div class="stats-container">
+            <!-- Course Card -->
+            <div class="stat-card">
+                <div class="stat-icon clr-b">📚</div>
+                <p class="stat-title">TOTAL COURSES</p>
+                <h2 class="stat-value">42</h2>
+                <p class="stat-description">12 new courses this month</p>
+            </div>
+
+            <!-- Students Card -->
+            <div class="stat-card">
+                <div class="stat-icon clr-b">👨‍🎓</div>
+                <p class="stat-title">TOTAL STUDENTS</p>
+                <h2 class="stat-value">1,200</h2>
+                <p class="stat-description">87 new enrollments this week</p>
+            </div>
+
+            <!-- Teachers Card -->
+            <div class="stat-card">
+                <div class="stat-icon clr-b">👨‍🏫</div>
+                <p class="stat-title">TOTAL SUPPORT STAFF</p>
+                <h2 class="stat-value">18</h2>
+                <p class="stat-description">2 joined this month</p>
+            </div>
+
+            <!-- weeks Card -->
+            <div class="stat-card">
+                <div class="stat-icon clr-b">💰</div>
+                <p class="stat-title">TOTAL WEEKS</p>
+                <h2 class="stat-value">123</h2>
+                <p class="stat-description">+15% from last month</p>
+            </div>
+        </div>
+    </div>
+<br><br><br>
+<Dashboard/>
+<br><br><br>
+      
       <!-- All Courses Section -->
-      <div class="card cardBack mt-6">
-        <h2 class="text-2xl font-bold text-center mb-4">All Courses</h2>
-        <div v-if="courses.length > 0" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-          <div v-for="course in courses" :key="course.id" class="card" @click="goToCourse(course)">
-            <h2 class="text-xl font-bold">{{ course.name }}</h2>
-            <p class="text-gray-600">{{ course.description }}</p>
+      <div class="box">
+        <h1>All Courses</h1>
+        <div v-if="courses.length > 0" class="stats-container">
+          <div v-for="course in courses" :key="course.id" class="stat-card" @click="goToCourse(course)">
+            <h2 class="stat-value">{{ course.name }}</h2>
+            <p class="stat-description">{{ course.description }}</p>
           </div>
         </div>
         <p v-else class="text-center text-gray-500">No courses found.</p>
@@ -80,10 +124,11 @@
 <script>
 import api from '@/utils/auth';
 import NavBar from "@/components/icons/NavBar.vue";
-
+import Dashboard from '../assets/charts.vue';
 export default {
+  
   name: "AdminDashboard",
-  components: { NavBar },
+  components: { NavBar, Dashboard },
   data() {
     return {
       user: JSON.parse(localStorage.getItem('user')) || { name: "Admin" },

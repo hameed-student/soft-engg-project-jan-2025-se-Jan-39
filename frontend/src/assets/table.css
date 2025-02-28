@@ -1,20 +1,78 @@
-table {
-    width: 90%;
-    border-collapse: collapse;
-    margin: auto;
-    font-family: Arial, sans-serif;
-  }
-  
-  th, td {
-    border: 1px solid #d4d4d4;
-    padding: 10px;
-    text-align: left;
-  }
-  
-  th {
-    background-color: #f3f3f3;
-  }
-  
-  tr:hover {
-    background-color: #f9f9f9;
-  }
+/* Container for the table */
+.table-container {
+  max-width: 80%;
+  margin: 0 auto; /* Center the table */
+  padding: 20px;
+}
+
+/* Style for the table */
+.styled-table {
+  width: 100%;
+  border-collapse: collapse; /* Ensures table borders collapse */
+  margin: 20px 0;
+  font-size: 16px;
+  text-align: left;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+/* Table headers */
+.styled-table th {
+  background-color: #42A5F5;
+  color: white;
+  padding: 12px 15px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+/* Table rows */
+.styled-table tr {
+  background-color: #da6ccb3a;
+  transition: background-color 0.6s ease; /* Smooth transition for hover effect */
+}
+
+/* Table cell padding */
+.styled-table td {
+  padding: 12px 15px;
+  color:black
+}
+
+/* Hover effect for rows */
+.styled-table tr:hover {
+  background-color: #f1f1f1;
+  color: black;
+}
+
+/* Alternate row color */
+.styled-table tr:nth-of-type(even) {
+  background-color: #ca46a970;;
+
+}
+.styled-table tr:nth-of-type(even):hover {
+  background-color: #f8f8f8;
+  color:black
+}
+
+/* Style for the table borders */
+.styled-table th, .styled-table td {
+  border: 1px solid #000000; /* Light gray border for clarity */
+}
+
+.styled-table th, .styled-table td {
+  border-left: 0;
+  border-top: 0;
+}
+
+.styled-table th {
+  border-top: 1px solid black; 
+}
+
+
+.styled-table th:first-child,
+.styled-table td:first-child {
+  border-left: 1px solid #020202;
+  /* Adding border on the left side of the first column */
+}
+
+.styled-table tr:last-child td {
+  border-bottom: 1px solid #000000; /* Adding border to the last row */
+}
