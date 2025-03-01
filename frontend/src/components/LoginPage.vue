@@ -22,8 +22,9 @@
             </div>
             <div class="inputbox">
               <label for="password">Password</label>
-              <input type="password" v-model="form.password" id="password" required>
-              <span v-if="errors.password" class="error-message">{{ errors.password }}</span>
+              <input :type="showPassword ? 'text' : 'password'" v-model="form.password" id="password" required> <br><br>
+              <button type="button" @click="togglePasswordVisibility"><pre v-if ="!showPassword">Show password</pre> <pre v-else>Hide password</pre> </button><br><br>
+              <span v-if="errors.password ||errors.server" class="error-message">{{ errors.password ||'server auth failed'}}</span>
             </div>
             <div class="inputbox">
               <input type="submit" value="Sign in">
@@ -48,10 +49,13 @@ data() {
       email: '',
       password: ''
     },
-    errors: {}
+    errors: {},showPassword:false
   };
 },
 methods: {
+  togglePasswordVisibility() {
+      this.showPassword = !this.showPassword;
+    },
   validateForm() {
     this.errors = {};
     
@@ -83,7 +87,6 @@ methods: {
       password: this.form.password
     });
 
-    console.log('Login Response:', response.data); // Debugging line
 
     const { user, access_token, refresh_token, message } = response.data;
 
@@ -125,4 +128,13 @@ methods: {
 <style scoped>
 @import '@/assets/navBar.css';
 @import '@/assets/loginRegister.css';
+button {
+  border: 1px solid rgba(83, 47, 71, 0.589);
+  cursor: pointer;
+  border-radius: 8px;
+  padding: 4px;
+  background: #ff4584;
+  color: #fff;
+  transition: background 0.3s ease;
+}
 </style>

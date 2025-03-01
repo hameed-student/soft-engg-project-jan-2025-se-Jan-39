@@ -1,4 +1,3 @@
-#testing git push 1 from local to remote
 from flask import Flask, send_from_directory, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
@@ -6,18 +5,91 @@ from flask_jwt_extended import JWTManager, jwt_required, get_jwt, get_jwt_identi
 from flask_cors import CORS
 from datetime import datetime, timedelta
 from flask_bcrypt import Bcrypt
-import os, re, io, csv
+from celery import Celery
+from celery.schedules import crontab
+import numpy as np
+import google.generativeai as genai
+from youtube_transcript_api import YouTubeTranscriptApi
+from sentence_transformers import SentenceTransformer
+import os, re, io, csv, faiss
 
 
 app = Flask(__name__, static_folder='dist')
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///ai_tutor.db'
 app.config['JWT_SECRET_KEY'] = 'SE_Project_T-39'
+genai.configure(api_key="AIzaSyB2D5nQ3cjdym46LywsernhNylpDIrS0oA")
+
+embed_model = SentenceTransformer("all-MiniLM-L6-v2")
+index = faiss.IndexFlatL2(768)
+
+app.config.update(
+    broker_url="redis://localhost:6379/0",
+    result_backend="redis://localhost:6379/0",
+    broker_connection_retry_on_startup=True
+)
 
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 bcrypt = Bcrypt(app)
 jwt = JWTManager(app)
 CORS(app)
+celery = Celery(app.name, broker=app.config["broker_url"])
+celery.conf.update(app.config)
+
+
+celery.conf.beat_schedule = {
+    "clean-expired-tokens": {
+        "task": "clean_expired_blacklisted_tokens",
+        "schedule": crontab(hour=0, minute=0)
+    }
+}
+celery.conf.timezone = "UTC"
+
+
+@celery.task(name="clean_expired_blacklisted_tokens")
+def clean_expired_blacklisted_tokens():
+    with app.app_context():
+        expired_tokens = TokenBlacklist.query.filter(TokenBlacklist.expires < datetime.now()).all()
+        if expired_tokens:
+            for token in expired_tokens:
+                db.session.delete(token)
+            db.session.commit()
+    return
+
+
+def generate_and_store_embeddings(content_id, text):
+    model = SentenceTransformer("all-MiniLM-L6-v2")
+    embedding = model.encode([text])
+    # Initialize FAISS index
+    dim = embedding.shape[1]
+    index = faiss.IndexFlatL2(dim)
+    index.add(embedding)
+    # Save index to disk
+    faiss.write_index(index, f"vector_dbs/course_{content_id}.faiss")
+
+
+
+@celery.task(name="extract_video_transcripts")
+def extract_video_transcripts(content_id):
+    with app.app_context():
+        content = CourseContent.query.get(content_id)
+        if not content:
+            return {"error": "Course content not found"}
+        # Extract video ID from YouTube URL
+        video_id_match = re.search(r"v=([a-zA-Z0-9_-]+)", content.video_link)
+        if not video_id_match:
+            return {"error": "Invalid YouTube URL"}
+        video_id = video_id_match.group(1)
+        try:
+            transcript_data = YouTubeTranscriptApi.get_transcript(video_id)
+            transcript_text = " ".join([t["text"] for t in transcript_data])
+        except Exception as e:
+            return {"error": f"Transcript extraction failed: {str(e)}"}
+        transcript = CourseTranscript(course_id=content.course_id, content_id=content.id, transcript_text=transcript_text)
+        db.session.add(transcript)
+        db.session.commit()
+        generate_and_store_embeddings(content_id, transcript_text)
+        return {"message": "Transcript extracted and stored successfully"}
 
 
 class User(db.Model):
@@ -30,7 +102,8 @@ class User(db.Model):
     
     enrollments = db.relationship('StudentEnrollment', back_populates='student', cascade="all, delete-orphan")
     support_courses = db.relationship('SupportStaff', back_populates='staff', cascade="all, delete-orphan")
-
+    chat_sessions = db.relationship('ChatSession', back_populates='user', cascade="all, delete-orphan")
+    
     def set_password(self, password):
         self.password_hash = bcrypt.generate_password_hash(password).decode('utf-8')
 
@@ -43,6 +116,7 @@ class User(db.Model):
     def generate_refresh_token(self):
         return create_refresh_token(identity={"id": self.id, "role": self.role}, expires_delta=timedelta(hours=168))
     
+
 class Course(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
@@ -51,6 +125,7 @@ class Course(db.Model):
     contents = db.relationship('CourseContent', back_populates='course', cascade="all, delete-orphan")
     enrollments = db.relationship('StudentEnrollment', back_populates='course', cascade="all, delete-orphan")
     support_staff = db.relationship('SupportStaff', back_populates='course', cascade="all, delete-orphan")
+    transcripts = db.relationship('CourseTranscript', back_populates='course', cascade="all, delete-orphan")
     
 
 class CourseContent(db.Model):
@@ -62,6 +137,8 @@ class CourseContent(db.Model):
     video_link = db.Column(db.String(200), nullable=False)
 
     course = db.relationship('Course', back_populates='contents')
+    transcripts = db.relationship('CourseTranscript', back_populates='content', cascade="all, delete-orphan")
+
 
 class StudentEnrollment(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -74,26 +151,57 @@ class StudentEnrollment(db.Model):
     student = db.relationship('User', back_populates='enrollments')
     course = db.relationship('Course', back_populates='enrollments')
     
-    
+
 class SupportStaff(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     staff_id = db.Column(db.Integer, db.ForeignKey('user.id'))
     course_id = db.Column(db.Integer, db.ForeignKey('course.id'))
     applied_at = db.Column(db.DateTime, default=datetime.utcnow)
     approved = db.Column(db.Boolean, default=False)
-    approved_at =db.Column(db.DateTime)
+    approved_at = db.Column(db.DateTime)
     
     staff = db.relationship('User', back_populates='support_courses')
     course = db.relationship('Course', back_populates='support_staff')
     
+
+class CourseTranscript(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    course_id = db.Column(db.Integer, db.ForeignKey('course.id'))
+    content_id = db.Column(db.Integer, db.ForeignKey('course_content.id'))
+    transcript_text = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    course = db.relationship('Course', back_populates='transcripts')
+    content = db.relationship('CourseContent', back_populates='transcripts')
+
+
+class ChatSession(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    messages = db.relationship('ChatMessage', back_populates='session', cascade="all, delete-orphan")
+    user = db.relationship('User', back_populates='chat_sessions')
+
+
+class ChatMessage(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    session_id = db.Column(db.Integer, db.ForeignKey('chat_session.id'))
+    sender = db.Column(db.String(6), nullable=False)
+    message = db.Column(db.Text, nullable=False)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+
+    session = db.relationship('ChatSession', back_populates='messages')
+
+
 class TokenBlacklist(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     jti = db.Column(db.String(50), unique=True, nullable=False)
     token_type = db.Column(db.String(20), nullable=False)
     expires = db.Column(db.DateTime, nullable=False)
     blacklisted_on = db.Column(db.DateTime, default=datetime.utcnow)
-    
 
+    
 def is_token_blacklisted(jti):
     return TokenBlacklist.query.filter_by(jti=jti).first() is not None
 
@@ -367,11 +475,16 @@ def add_or_update_course_contents():
         existing_content.description = description
         existing_content.video_link = video_link
         message = "Course content updated successfully."
+        content_id = existing_content.id
     else:
         new_content = CourseContent(course_id=course_id, week=week, title=title, description=description, video_link=video_link)
         db.session.add(new_content)
         message = "Course content added successfully."
     db.session.commit()
+    if new_content:
+        content_id = new_content.id
+    extract_video_transcripts.delay(content_id)
+    message += " Transcript extraction started."
     return jsonify({"message": message}), 200
 
 
@@ -427,6 +540,8 @@ def upload_course_contents():
                     existing_content.title = title
                     existing_content.description = description
                     existing_content.video_link = video_link
+                    db.session.commit()
+                    extract_video_transcripts.delay(existing_content.id)
                 else:
                     new_content = CourseContent(course_id=course_id, week=week, title=title, description=description, video_link=video_link)
                     contents_to_add.append(new_content)
@@ -435,7 +550,9 @@ def upload_course_contents():
         if contents_to_add:
             db.session.bulk_save_objects(contents_to_add)
         db.session.commit()
-        return jsonify({"message": "Course contents uploaded successfully."}), 200
+        for content in contents_to_add:
+            extract_video_transcripts.delay(content.id)
+        return jsonify({"message": "Course contents uploaded successfully.  Transcript extraction started."}), 200
     except Exception as e:
         return jsonify({"error": f"Error processing CSV file: {str(e)}"}), 500
     
@@ -536,6 +653,133 @@ def student_dashboard():
     enrolled_courses = db.session.query(Course).join(StudentEnrollment).filter(StudentEnrollment.student_id == user.id, StudentEnrollment.approved == True).all()
     enrolled_courses = [{"id": course.id, "name": course.name} for course in enrolled_courses]
     return jsonify({"courses": courses, "enrolled_courses": enrolled_courses}), 200
+
+
+def start_session(user_id):
+    user = User.query.get_or_404(user_id)
+    if user.role != 'student':
+        return jsonify({"error": "Unauthorized request. Only Student can access this path."}), 403    
+    session = ChatSession(user_id=user_id)
+    db.session.add(session)
+    db.session.commit()
+    return session.id
+
+
+@app.route("/delete_session/<int:session_id>", methods=["DELETE"])
+@jwt_required()
+def delete_session(session_id):
+    user_id = get_jwt_identity().get("id")
+    user = User.query.get_or_404(user_id)
+    session = ChatSession.query.get_or_404(session_id)
+    if not session:
+        return jsonify({"error": "Session not found"}), 404
+    if user.id != session.user_id:
+        return jsonify({"error": "Unauthorized request denied..."}), 403
+    db.session.delete(session)
+    db.session.commit()
+    return jsonify({"message": "Session deleted successfully!"}), 200
+
+
+@app.route('/chat', methods=['POST'])
+@jwt_required()
+def chat():
+    user_id = get_jwt_identity().get("id")
+    user = User.query.get_or_404(user_id)
+    if user.role != 'student':
+        return jsonify({"error": "Unauthorized request. Only students can access this path."}), 403
+    data = request.json
+    session_id = data.get("session_id")    
+    if not session_id:
+        session_id = start_session(user.id)    
+    query = data.get("message", "").strip()
+    if not query:
+        return jsonify({"error": "Message cannot be empty"}), 400
+    chat_history = ChatMessage.query.filter_by(session_id=session_id).order_by(ChatMessage.timestamp.desc()).limit(10).all()
+    chat_history.reverse()
+    history_text = "\n".join([f"{msg.sender}: {msg.message}" for msg in chat_history])
+
+    course_contents = CourseContent.query.all()
+    relevant_texts = []
+    query_embedding = embed_model.encode([query])    
+    for content in course_contents:
+        faiss_index_path = f"vector_dbs/course_{content.id}.faiss"
+        if os.path.exists(faiss_index_path):
+            index = faiss.read_index(faiss_index_path)
+            _, indices = index.search(query_embedding, 3)
+            for idx in indices[0]:  # Iterate through matched indices
+                if idx != -1:  # Ignore invalid indices
+                    transcript = CourseTranscript.query.get(idx)
+                    if transcript:
+                        relevant_texts.append(transcript.transcript_text)
+        if len(relevant_texts) >= 3:
+            break
+
+    if relevant_texts:
+        retrieved_context = " ".join(relevant_texts[:3])
+        use_ai_knowledge = False
+    else:
+        retrieved_context = "No relevant transcripts found."
+        use_ai_knowledge = True  # Enable AI knowledge fallback
+
+    try:
+        if use_ai_knowledge:
+            prompt = f"""
+                        The user has asked a question that is not found in the available course transcripts.
+                        Instead of giving a direct answer, guide the user by providing references, book names, 
+                        article titles, or online resources where they can explore further.
+
+                        **Past Chat History:**
+                        {history_text}
+
+                        **User Query:**
+                        {query}
+
+                        **Response Instructions:**
+                        - Do NOT provide a direct answer.
+                        - Suggest books, articles, research papers, or websites related to the topic.
+                        - If the question is general, suggest useful study techniques or how to approach the topic.
+
+                        Provide an informative and helpful response.
+                    """
+        else:
+            prompt = f"""
+                        You are an AI assistant. Use the following context to assist the user.
+
+                        **Past Chat History:**
+                        {history_text}
+
+                        **Relevant Course Content:**
+                        {retrieved_context}
+
+                        **User Query:**
+                        {query}
+
+                        Provide an informative response based on the course material.
+                    """
+        response = genai.generate_content(prompt=prompt)
+    except Exception as e:
+        return jsonify({"error": f"AI response failed: {str(e)}"}), 500
+    user_chat = ChatMessage(session_id=session_id, sender="user", message=query)
+    ai_chat = ChatMessage(session_id=session_id, sender="bot", message=response)
+    db.session.add_all([user_chat, ai_chat])
+    db.session.commit()
+    return jsonify({"response": response}), 201
+
+
+
+@app.route('/chat/history/<int:session_id>', methods=['GET'])
+@jwt_required()
+def get_chat_history(session_id):
+    user_id = get_jwt_identity().get("id")
+    user = User.query.get_or_404(user_id)
+    if user.role != 'student':
+        return jsonify({"error": "Unauthorized request. Only Student can access this path."}), 403
+    session = ChatSession.query.filter_by(id=session_id, user_id=user_id).first()
+    if not session:
+        return jsonify({"error": "Session not found."}), 404
+    chat_history = ChatMessage.query.filter_by(session_id=session_id).order_by(ChatMessage.timestamp.asc()).all()
+    chat_history = [ {"id": msg.id, "sender": msg.sender, "message": msg.message, "timestamp": msg.timestamp} for msg in chat_history ]
+    return jsonify({"session_id": session_id, "chat_history": chat_history}), 200
 
 
 if __name__ == '__main__':

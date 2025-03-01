@@ -2,27 +2,27 @@
   <div class="body">
     <NavBar :courses="courses" @fetchData="fetchData"/>
     <div class="container mx-auto p-6">
-      <h2 class="text-3xl font-bold text-gray-800 mb-6">Welcome! {{ user.name }}</h2>
-
+      <h3>Welcome, {{ user.name }}</h3>
+<br><br>
       <!-- Pending Student Enrollment Approvals -->
-      <div v-if="pendingEnrollments.length != 0" class="card mt-6">
-        <h2 class="text-2xl font-bold">Pending Student Enrollment Approvals</h2>
-        <div class="overflow-x-auto">
-          <table class="w-[90%] mx-auto border-collapse border border-gray-300">
-            <thead class="bg-gray-100">
+      <div v-if="pendingEnrollments.length != 0" class="box">
+        <h1>Pending Student Enrollment Approvals</h1>
+        <div class="table-container"> 
+          <table class="styled-table">
+            <thead >
               <tr>
-                <th class="border border-gray-300 px-4 py-2">Name</th>
-                <th class="border border-gray-300 px-4 py-2">Email</th>
-                <th class="border border-gray-300 px-4 py-2">Course</th>
-                <th class="border border-gray-300 px-4 py-2">Actions</th>
+                <th     >Name</th>
+                <th     >Email</th>
+                <th     >Course</th>
+                <th     >Actions</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="enrollment in pendingEnrollments" :key="enrollment.student_id" class="hover:bg-gray-50">
-                <td class="border border-gray-300 px-4 py-2">{{ enrollment.student_name }}</td>
-                <td class="border border-gray-300 px-4 py-2">{{ enrollment.student_email }}</td>
-                <td class="border border-gray-300 px-4 py-2">{{ enrollment.course_name }}</td>
-                <td class="border border-gray-300 px-4 py-2">
+              <tr v-for="enrollment in pendingEnrollments" :key="enrollment.student_id"  >
+                <td     >{{ enrollment.student_name }}</td>
+                <td     >{{ enrollment.student_email }}</td>
+                <td     >{{ enrollment.course_name }}</td>
+                <td     >
                   <button @click="manageEnrollments(enrollment.student_id, enrollment.course_id, 'approve')" class="button">Approve</button>
                   <button @click="manageEnrollments(enrollment.student_id, enrollment.course_id, 'reject')" class="button">Reject</button>
                 </td>
@@ -31,17 +31,18 @@
           </table>
         </div>
       </div>
-      <p v-else style="color: black;background-color: white;border-radius: 10px;padding: 10px;margin-top: 20px;">No pending approvals.</p>
+      <p v-else class="box">No pending enrollment approvals.</p>
+      <br><br><br>
       <!-- Support Staff Courses -->
-      <div class="card cardBack mt-6">
-        <h2 class="text-2xl font-bold text-center mb-4">All Courses</h2>
-        <div v-if="supportCourses.length > 0" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-          <div v-for="course in supportCourses" :key="course.id" class="card" @click="goToCourse(course)">
-            <h2 class="text-xl font-bold">{{ course.name }}</h2>
-            <p class="text-gray-600">{{ course.description }}</p>
+      <div class="box">
+        <h1>All Courses</h1>
+        <div v-if="supportCourses.length > 0" class="stats-container">
+          <div v-for="course in supportCourses" :key="course.id" class="stat-card" @click="goToCourse(course)">
+            <h2 class="stat-value">{{ course.name }}</h2>
+            <p class="stat-value">{{ course.description }}</p>
           </div>
         </div>
-        <p v-else class="text-center text-gray-500">No courses found.</p>
+        <p v-else class="box">No courses found.</p>
       </div>
     </div>
   </div>

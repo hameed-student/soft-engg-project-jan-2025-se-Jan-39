@@ -1,7 +1,7 @@
 <template>
   <div v-if="isVisible" class="modal-overlay" @click.self="closeEnrollmentForm">
     <div class="container">
-      <div class="card">
+      <div class="box">
         <span class="close-button" @click="closeEnrollmentForm">&times;</span>
         <h2>Enroll for a New Course!</h2>
 
@@ -72,4 +72,5 @@ export default {
 
 <style scoped>
 @import '@/assets/overlay.css';
+@import '@/assets/card.css';
 </style>

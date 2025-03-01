@@ -2,18 +2,18 @@
   <div class="body">
     <NavBar :courses="courses" @fetchData="fetchData"/>
     <div class="container">
-      <h2>Welcome! {{ user.name }}</h2>
+      <h3>Welcome {{ user.name }}</h3>
 
       <!-- Registered Courses Section -->
-      <div class="card cardBack mt-6">
-        <h2 class="text-2xl font-bold text-center mb-4">Registered Courses</h2>
-        <div v-if="enrolled_courses.length > 0" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-          <div v-for="course in enrolled_courses" :key="course.id" class="card" @click="goToCourse(course)">
-            <h2 class="text-xl font-bold">{{ course.name }}</h2>
-            <p class="text-gray-600">{{ course.description }}</p>
+      <div class="box">
+        <h1>Registered Courses</h1>
+        <div v-if="enrolled_courses.length > 0" class="stats-container">
+          <div v-for="course in enrolled_courses" :key="course.id" class="stat-card" @click="goToCourse(course)">
+            <h2 class="stat-value">{{ course.name }}</h2>
+            <p class="stat-description">{{ course.description }}</p>
           </div>
         </div>
-        <p v-else style="color: black;background-color: white;border-radius: 10px;padding: 10px;margin-top: 20px;">No enrolled courses found.</p>
+        <p v-else class="box">No enrolled courses found.</p>
       </div>
     </div>
 

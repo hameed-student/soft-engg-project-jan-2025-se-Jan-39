@@ -3,7 +3,7 @@
     <NavBar @fetchData="fetchData"/>
     <div class="container">
       <h3>Welcome Admin</h3>
-
+<br><br>
       <!-- Pending Support Staff Approvals -->
       <div v-if="pendingApprovals.length != 0" class="box">
         <h1>Pending Support Staff Approvals</h1>
@@ -32,7 +32,7 @@
           </table>
         </div>
       </div>
-      <p v-else style="color: black;background-color: white;border-radius: 10px;padding: 10px;margin-top: 20px;">No approvals pending for support staff.</p>
+      <p v-else class="box">No approvals pending for support staff.</p>
       <br><br><br>
       <!-- Pending Student Enrollment Approvals -->
       <div v-if="pendingEnrollments.length != 0" class="box">
@@ -62,7 +62,7 @@
           </table>
         </div>
       </div>
-      <p v-else style="color: black;background-color: white;border-radius: 10px;padding: 10px;margin-top: 20px;">No approvals pending for student enrollments.</p>
+      <p v-else class="box">No approvals pending for student enrollments.</p>
       <br><br><br>
       <!--app stats-->
       
@@ -115,7 +115,7 @@
             <p class="stat-description">{{ course.description }}</p>
           </div>
         </div>
-        <p v-else class="text-center text-gray-500">No courses found.</p>
+        <p v-else class="box">No courses found.</p>
       </div>
     </div>
   </div>

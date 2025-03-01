@@ -1,4 +1,4 @@
-from app import db, User, app
+from backend.app import db, User, app
 
 def create_admin():
     with app.app_context():

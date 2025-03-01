@@ -1,7 +1,7 @@
 <template>
   <div v-if="isVisible" class="modal-overlay" @click.self="closeModal">
     <div class="container">
-      <div class="card">
+      <div class="box">
         <span class="close-button" @click="$emit('close')">&times;</span>
         <h2>Profile</h2>
         <form @submit.prevent="validateAndUpdateProfile">
@@ -93,6 +93,7 @@ export default {
 
 <style scoped>
 @import '@/assets/overlay.css';
+@import '@/assets/card.css';
 .error {
   color: red;
   font-size: 0.8em;
