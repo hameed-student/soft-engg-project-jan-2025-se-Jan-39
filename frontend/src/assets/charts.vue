@@ -1,5 +1,6 @@
 <template>
   <div class="box" style="grid-template-columns: repeat(2,1fr);grid-template-rows: auto auto ;display:grid">
+    <h1>Visual statistics</h1> <br>
     <div class="graph-container">
       <!-- First graph: Number of enrolled students vs Course Name (Bar Chart) -->
       <h3>Enrolled Students per Course</h3>

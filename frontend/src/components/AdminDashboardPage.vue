@@ -102,8 +102,7 @@
             </div>
         </div>
     </div>
-<br><br><br>
-<Dashboard/>
+
 <br><br><br>
       
       <!-- All Courses Section -->
@@ -117,7 +116,10 @@
         </div>
         <p v-else class="box">No courses found.</p>
       </div>
+      
     </div>
+    <br><br><br>
+<Dashboard/>
   </div>
 </template>
 

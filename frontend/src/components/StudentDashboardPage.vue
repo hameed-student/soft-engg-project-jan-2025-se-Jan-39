@@ -2,7 +2,7 @@
   <div class="body">
     <NavBar :courses="courses" @fetchData="fetchData"/>
     <div class="container">
-      <h3>Welcome {{ user.name }}</h3>
+      <h3>Welcome, {{ user.name }}</h3>
 
       <!-- Registered Courses Section -->
       <div class="box">

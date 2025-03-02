@@ -3,7 +3,7 @@
     <div class="container">
       <div class="box">
         <span class="close-button" @click="$emit('close')">&times;</span>
-        <h2>Profile</h2>
+        <h1>Profile</h1>
         <form @submit.prevent="validateAndUpdateProfile">
           <div class="scrollable">
             

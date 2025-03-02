@@ -3,7 +3,7 @@
     <div class="container">
       <div class="box">
         <span class="close-button" @click="closeEnrollmentForm">&times;</span>
-        <h2>Enroll for a New Course!</h2>
+        <h1>Enroll for a New Course!</h1>
 
         <form @submit.prevent="EnrollCourse">
           <div class="scrollable">  

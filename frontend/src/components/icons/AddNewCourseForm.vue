@@ -1,9 +1,9 @@
 <template>
   <div v-if="isVisible" class="modal-overlay" @click.self="closeAddCourse">
     <div class="container">
-      <div class="card">
+      <div class="box">
         <span class="close-button" @click="$emit('close')">&times;</span>
-        <h2>Add New Course</h2>
+        <h1>Add New Course</h1>
         <form @submit.prevent="validateAndSubmit">
           <div class="scrollable">
             <label for="courseName">Course Name</label>
@@ -87,6 +87,7 @@ export default {
 
 <style scoped>
 @import '@/assets/overlay.css';
+@import '@/assets/card.css';
 .error {
   color: red;
   font-size: 0.8em;

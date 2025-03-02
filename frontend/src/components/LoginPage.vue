@@ -30,7 +30,7 @@
               <input type="submit" value="Sign in">
             </div>
             <div class="inputbox">
-              <p>Don't have an account? <router-link to="/register" >Sign Up</router-link></p>
+              <p>Don't have an account? <router-link to="/register">Sign Up</router-link></p>
             </div>
           </form>
         </div>

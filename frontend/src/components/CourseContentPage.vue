@@ -1,9 +1,9 @@
 <template>
-  <NavBar @fetchData="fetchCourseContents"/>
+  <NavBar :courses="courses" @fetchData="fetchCourseContents"/>
   <div class="course-page">
     <!-- Sidebar (20%) -->
     <div class="sidebar">
-      <h2>Course Contents</h2>
+      <h3>Course Contents</h3>
       <ul>
         <li v-for="week in weeks" :key="week.week">
           <div class="week-header" @click="toggleWeek(week.week)">
@@ -11,6 +11,7 @@
             <span class="arrow" :class="{ rotated: activeWeek === week.week }"></span>
           </div>
           <ul v-show="activeWeek === week.week" class="content-list">
+            <div class="box">
             <li 
               v-for="content in week.contents" 
               :key="content.id" 
@@ -19,8 +20,9 @@
               <span @click="selectVideo(content.video_link, content.title)" class="content-title">
                 {{ content.title }}
               </span>
-              <button class="delete-btn" @click="deleteCourseContent(content.id, week.week, content.title)">🗑️</button>
+              <button    @click="deleteCourseContent(content.id, week.week, content.title)" >❌</button>
             </li>
+            </div>
           </ul>
         </li>
       </ul>
@@ -54,10 +56,11 @@ export default {
       activeWeek: null,
       selectedVideo: null,
       selectedTitle: "",
+      courses: [],
     };
   },
   methods: {
-    fetchCourseContents() {
+   async  fetchCourseContents() {
   this.weeks = this.groupByWeek([
     { id: 1, week: 1, title: "Introduction to Course", video_link: "https://www.youtube.com/watch?v=dQw4w9WgXcQ" },
     { id: 2, week: 1, title: "Course Objectives", video_link: "https://www.youtube.com/watch?v=3JZ_D3ELwOQ" },
@@ -65,6 +68,13 @@ export default {
     { id: 4, week: 2, title: "Hands-on Example", video_link: "https://www.youtube.com/watch?v=8ZcmTl_1ER8" },
     { id: 5, week: 3, title: "Advanced Concepts", video_link: "https://www.youtube.com/watch?v=BtN-goy9VOY" },
   ]);
+  try {
+        const response = await api.get('/dashboard/student');
+        this.courses = response.data.courses;
+        console.log(response)
+      } catch (error) {
+        console.error("Error fetching dashboard data:", error);
+      }
 },
 
     async deleteCourseContent(contentId, week, title) {
@@ -138,7 +148,7 @@ export default {
 /* Sidebar */
 .sidebar {
   width: 20%;
-  background: linear-gradient(90deg, #667eea, #764ba2);
+  background: linear-gradient(90deg, #5f75d4ea, #7f57a773);
   color: white;
   padding: 20px;
   overflow-y: auto;
@@ -161,7 +171,7 @@ export default {
 
 .week-header {
   padding: 12px;
-  background: #495057;
+  background: #28405865;
   cursor: pointer;
   border-radius: 5px;
   display: flex;
@@ -171,7 +181,7 @@ export default {
 }
 
 .week-header:hover {
-  background: #6c757d;
+  background: #2645612a;
 }
 
 .arrow {
@@ -185,29 +195,31 @@ export default {
 /* Dropdown animation */
 .content-list {
   background: linear-gradient(90deg, #667eea, #764ba2);
-  padding: 10px;
+  padding: 1px;
   border-radius: 5px;
-  margin-top: 5px;
+  margin-top: 1px;
 }
 
 .content-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: #868e96;
+  background: #7d9cbb2d;
   border-radius: 5px;
-  padding: 8px;
-  margin-bottom: 5px;
+  padding: 1px;
+  margin-bottom: 1px;
 }
 
 .content-title {
   cursor: pointer;
+  padding: 5px;
+  border-radius: 5px;
   flex-grow: 1;
   transition: background 0.3s ease;
 }
 
 .content-title:hover {
-  background: #adb5bd;
+  background: #e9e0e252;
 }
 
 /* Delete button */
