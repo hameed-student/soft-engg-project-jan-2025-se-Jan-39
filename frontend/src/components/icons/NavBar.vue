@@ -26,8 +26,7 @@
         <span v-if="user.role === 'admin'" @click="openAddCourse" class="nav-link">Add new Course</span>
         <AddNewCourseForm :isVisible="isAddNewCourseVisible" @close="isAddNewCourseVisible = false" @updateCourses="fetchData"/>
 
-        <span v-if="user.role === 'admin'" @click="openAddCourseContent" class="nav-link">Add Course Contents</span>
-        <AddCourseContents :isVisible="isAddCourseContentVisible" @close="isAddCourseContentVisible = false" />
+       
       </div>
       <div class="nav-right">
         <span @click="logoutHandler" class="nav-link">Log Out</span>

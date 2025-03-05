@@ -8,19 +8,18 @@
         <li v-for="week in weeks" :key="week.week">
           <div class="week-header" @click="toggleWeek(week.week)">
             <span>Week {{ week.week }}</span>
-            <span class="arrow" :class="{ rotated: activeWeek === week.week }"></span>
+            <span class="arrow" :class="{ rotated: activeWeek === week.week }">˅</span>
           </div>
           <ul v-show="activeWeek === week.week" class="content-list">
             <div class="box">
             <li 
               v-for="content in week.contents" 
               :key="content.id" 
-              class="content-item"
-            >
+              class="content-item">
               <span @click="selectVideo(content.video_link, content.title)" class="content-title">
                 {{ content.title }}
               </span>
-              <button    @click="deleteCourseContent(content.id, week.week, content.title)" >❌</button>
+              <button   @click="deleteCourseContent(content.id, week.week, content.title)" >❌</button>
             </li>
             </div>
           </ul>
@@ -61,17 +60,21 @@ export default {
   },
   methods: {
    async  fetchCourseContents() {
-  this.weeks = this.groupByWeek([
-    { id: 1, week: 1, title: "Introduction to Course", video_link: "https://www.youtube.com/watch?v=dQw4w9WgXcQ" },
-    { id: 2, week: 1, title: "Course Objectives", video_link: "https://www.youtube.com/watch?v=3JZ_D3ELwOQ" },
-    { id: 3, week: 2, title: "Deep Dive into Basics", video_link: "https://www.youtube.com/watch?v=5qap5aO4i9A" },
-    { id: 4, week: 2, title: "Hands-on Example", video_link: "https://www.youtube.com/watch?v=8ZcmTl_1ER8" },
-    { id: 5, week: 3, title: "Advanced Concepts", video_link: "https://www.youtube.com/watch?v=BtN-goy9VOY" },
-  ]);
+  
   try {
-        const response = await api.get('/dashboard/student');
-        this.courses = response.data.courses;
-        console.log(response)
+    const response = await api.get('/open');
+    this.courses = response.data.courses;
+    const res= await api.get(`/course_contents/${this.$route.query.id }`);
+    if (res.data.course_contents.length === 0) {
+        alert("No course contents found.");
+        this.weeks = this.groupByWeek([
+    { id: 1, week: 1, title: "No course contents found", video_link: "https://www.youtube.com/watch?v=dQw4w9WgXcQ" },
+    
+  ]);
+        return;
+      }
+    this.weeks = this.groupByWeek(res.data.course_contents);
+        
       } catch (error) {
         console.error("Error fetching dashboard data:", error);
       }
@@ -196,7 +199,7 @@ export default {
 .content-list {
   background: linear-gradient(90deg, #667eea, #764ba2);
   padding: 1px;
-  border-radius: 5px;
+  border-radius: 10px;
   margin-top: 1px;
 }
 
@@ -204,7 +207,7 @@ export default {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: #7d9cbb2d;
+  background: #7d9cbb00;
   border-radius: 5px;
   padding: 1px;
   margin-bottom: 1px;
@@ -212,7 +215,7 @@ export default {
 
 .content-title {
   cursor: pointer;
-  padding: 5px;
+  padding: 4px 15px;
   border-radius: 5px;
   flex-grow: 1;
   transition: background 0.3s ease;

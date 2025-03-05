@@ -9,8 +9,8 @@
           <form @submit.prevent="submitCourseContent">
             
               
-              <label for="course_id">Course ID</label>
-              <input type="number" id="course_id" v-model="form.course_id" required />
+              <label for="course_id">Course ID </label>
+              <input type="number" id="course_id" v-model="form.course_id"  readonly  />
   
               <label for="week">Week</label>
               <input type="number" id="week" v-model="form.week" min="1" max="52" required />
@@ -44,7 +44,7 @@
     data() {
       return {
         form: {
-          course_id: '',
+          course_id:null,
           week: '',
           title: '',
           description: '',
@@ -53,9 +53,23 @@
         csvFile: null
       };
     },
+    watch: {
+  course: {
+    immediate: true,
+    handler(newCourse) {
+      if (newCourse) {
+        this.form.course_id = newCourse.id;
+      }
+    }
+  }
+},
     props: {
       isVisible: {
         type: Boolean,
+        required: true
+      },
+      course:{
+        type: Object,
         required: true
       }
     },

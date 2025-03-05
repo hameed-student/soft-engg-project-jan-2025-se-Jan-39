@@ -1,6 +1,8 @@
 <template>
   <div class="body">
     <NavBar :courses="courses" @fetchData="fetchData"/>
+    <AddCourseContents :course="course" :isVisible="isAddCourseContentVisible"  @close="isAddCourseContentVisible = false" />
+
     <div class="container mx-auto p-6">
       <h3>Welcome, {{ user.name }}</h3>
 <br><br>
@@ -37,9 +39,11 @@
       <div class="box">
         <h1>All Courses</h1>
         <div v-if="supportCourses.length > 0" class="stats-container">
-          <div v-for="course in supportCourses" :key="course.id" class="stat-card" @click="goToCourse(course)">
-            <h2 class="stat-value">{{ course.name }}</h2>
-            <p class="stat-value">{{ course.description }}</p>
+          <div v-for="course in supportCourses" :key="course.id" class="stat-card" >
+            <div class="stat-icon clr-b"><button @click="openAddCourseContent(course)">➕  </button> 
+            </div>
+            <h2 class="stat-value" @click="goToCourse(course)">{{ course.name }}</h2>
+            <p class="stat-description" @click="goToCourse(course)">Proffessor name: {{ course.prof }}</p>
           </div>
         </div>
         <p v-else class="box">No courses found.</p>
@@ -51,19 +55,25 @@
 <script>
 import api from '@/utils/auth';
 import NavBar from "@/components/icons/NavBar.vue";
+import AddCourseContents from "@/components/icons/AddCourseContents.vue";
 
 export default {
   name: "SupportStaffDashboard",
-  components: { NavBar },
+  components: { NavBar, AddCourseContents },
   data() {
     return {
+      course:{},
+      isAddCourseContentVisible: false,
       user: JSON.parse(localStorage.getItem('user')) || { name: "Support Staff" },
       pendingEnrollments: [],
       courses: [],
       supportCourses: [],
     };
   },
-  methods: {
+  methods: {openAddCourseContent(course) {
+      this.course = course;
+      this.isAddCourseContentVisible = true;
+    },
     async fetchData() {
       try {
         const response = await api.get('/dashboard/support_staff');

@@ -11,14 +11,19 @@ import numpy as np
 import google.generativeai as genai
 from youtube_transcript_api import YouTubeTranscriptApi
 from sentence_transformers import SentenceTransformer
-import os, re, io, csv, faiss
+import os, re, io, csv, json, faiss
 
 
 app = Flask(__name__, static_folder='dist')
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///ai_tutor.db'
 app.config['JWT_SECRET_KEY'] = 'SE_Project_T-39'
-genai.configure(api_key="AIzaSyB2D5nQ3cjdym46LywsernhNylpDIrS0oA")
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=24)
+app.config['JWT_REFRESH_TOKEN_EXPIRES'] = timedelta(hours=168)
 
+genai.configure(api_key="AIzaSyB2D5nQ3cjdym46LywsernhNylpDIrS0oA")
+model = genai.GenerativeModel("gemini-2.0-flash")
+
+VECTOR_DB_PATH = "vector_dbs"
 embed_model = SentenceTransformer("all-MiniLM-L6-v2")
 index = faiss.IndexFlatL2(768)
 
@@ -58,21 +63,32 @@ def clean_expired_blacklisted_tokens():
 
 
 def generate_and_store_embeddings(content_id, text):
-    model = SentenceTransformer("all-MiniLM-L6-v2")
-    embedding = model.encode([text])
-    # Initialize FAISS index
-    dim = embedding.shape[1]
-    index = faiss.IndexFlatL2(dim)
-    index.add(embedding)
-    # Save index to disk
-    faiss.write_index(index, f"vector_dbs/course_{content_id}.faiss")
-
+    embedding = embed_model.encode([text])  # Shape: (1, dim)
+    faiss_index_path = f"{VECTOR_DB_PATH}/course_{content_id}.faiss"
+    id_map_path = f"{VECTOR_DB_PATH}/course_{content_id}_ids.npy"
+    # Ensure directory exists
+    os.makedirs(VECTOR_DB_PATH, exist_ok=True)
+    if os.path.exists(faiss_index_path):
+        # Load existing index
+        index = faiss.read_index(faiss_index_path)
+        id_map = np.load(id_map_path).tolist()
+    else:
+        # Create a new index
+        dim = embedding.shape[1]  # Get embedding dimension
+        index = faiss.IndexFlatL2(dim)
+        id_map = []
+    index.add(embedding)  # Add new embedding
+    id_map.append(content_id)  # Store mapping of FAISS index to content_id
+    # Save the updated index and ID mapping
+    faiss.write_index(index, faiss_index_path)
+    np.save(id_map_path, np.array(id_map))
+    return
 
 
 @celery.task(name="extract_video_transcripts")
 def extract_video_transcripts(content_id):
     with app.app_context():
-        content = CourseContent.query.get(content_id)
+        content = db.session.get(CourseContent, content_id)
         if not content:
             return {"error": "Course content not found"}
         # Extract video ID from YouTube URL
@@ -85,8 +101,12 @@ def extract_video_transcripts(content_id):
             transcript_text = " ".join([t["text"] for t in transcript_data])
         except Exception as e:
             return {"error": f"Transcript extraction failed: {str(e)}"}
-        transcript = CourseTranscript(course_id=content.course_id, content_id=content.id, transcript_text=transcript_text)
-        db.session.add(transcript)
+        existing_transcript = CourseTranscript.query.filter_by(content_id=content.id).first()
+        if existing_transcript:
+            existing_transcript.transcript_text = transcript_text
+        else:
+            new_transcript = CourseTranscript(course_id=content.course_id, content_id=content.id, transcript_text=transcript_text)
+            db.session.add(new_transcript)
         db.session.commit()
         generate_and_store_embeddings(content_id, transcript_text)
         return {"message": "Transcript extracted and stored successfully"}
@@ -111,39 +131,79 @@ class User(db.Model):
         return bcrypt.check_password_hash(self.password_hash, password)
 
     def generate_access_token(self):
-        return create_access_token(identity={"id": self.id, "role": self.role}, expires_delta=timedelta(hours=24))
+        return create_access_token(identity=str(self.id))
     
     def generate_refresh_token(self):
-        return create_refresh_token(identity={"id": self.id, "role": self.role}, expires_delta=timedelta(hours=168))
+        return create_refresh_token(identity=str(self.id))
     
 
 class Course(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100), nullable=False)
+    name = db.Column(db.String(100), unique=True, nullable=False)
     prof = db.Column(db.String(100), nullable=False)
     
     contents = db.relationship('CourseContent', back_populates='course', cascade="all, delete-orphan")
     enrollments = db.relationship('StudentEnrollment', back_populates='course', cascade="all, delete-orphan")
     support_staff = db.relationship('SupportStaff', back_populates='course', cascade="all, delete-orphan")
     transcripts = db.relationship('CourseTranscript', back_populates='course', cascade="all, delete-orphan")
+    assignments = db.relationship('Assignment', back_populates='course', cascade="all, delete-orphan")
     
 
 class CourseContent(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    course_id = db.Column(db.Integer, db.ForeignKey('course.id'))
+    course_id = db.Column(db.Integer, db.ForeignKey('course.id'),nullable=False)
     week = db.Column(db.Integer, nullable=False)
     title = db.Column(db.String(100), nullable=False)
-    description = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text, nullable=True)
     video_link = db.Column(db.String(200), nullable=False)
 
     course = db.relationship('Course', back_populates='contents')
     transcripts = db.relationship('CourseTranscript', back_populates='content', cascade="all, delete-orphan")
 
 
+class Assignment(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    course_id = db.Column(db.Integer, db.ForeignKey('course.id'), nullable=False)
+    week = db.Column(db.Integer, nullable=False)
+    title = db.Column(db.String(200), nullable=False)
+    due_date = db.Column(db.DateTime, nullable=False)
+
+    course = db.relationship('Course', back_populates='assignments')
+    questions = db.relationship('AssignmentQuestion', back_populates='assignment', cascade="all, delete-orphan")
+    answers = db.relationship('StudentAnswer', back_populates='assignment', cascade="all, delete-orphan")
+
+
+class AssignmentQuestion(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    assignment_id = db.Column(db.Integer, db.ForeignKey('assignment.id'), nullable=False)
+    question_text = db.Column(db.Text, nullable=False)
+    question_type = db.Column(db.String(20), nullable=False)  # "mcq", "string"
+    
+    # Only used for MCQ-type questions
+    choices = db.Column(db.JSON, nullable=True)  # Stores choices as JSON array
+    correct_answer = db.Column(db.Text, nullable=True)
+
+    assignment = db.relationship('Assignment', back_populates='questions')
+    answers = db.relationship('StudentAnswer', back_populates='question', cascade="all, delete-orphan")
+
+
+class StudentAnswer(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    student_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    assignment_id = db.Column(db.Integer, db.ForeignKey('assignment.id'), nullable=False)
+    question_id = db.Column(db.Integer, db.ForeignKey('assignment_question.id'), nullable=False)
+    selected_answer = db.Column(db.Text, nullable=False)
+    is_correct = db.Column(db.Boolean, nullable=False)
+
+    student = db.relationship('User', backref='answers')
+    assignment = db.relationship('Assignment', back_populates='answers')
+    question = db.relationship('AssignmentQuestion', back_populates='answers')
+
+
 class StudentEnrollment(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    student_id = db.Column(db.Integer, db.ForeignKey('user.id'))
-    course_id = db.Column(db.Integer, db.ForeignKey('course.id'))
+    student_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    course_id = db.Column(db.Integer, db.ForeignKey('course.id'), nullable=False)
     registered_at = db.Column(db.DateTime, default=datetime.utcnow)
     approved = db.Column(db.Boolean, default=False)
     approved_at = db.Column(db.DateTime)
@@ -154,8 +214,8 @@ class StudentEnrollment(db.Model):
 
 class SupportStaff(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    staff_id = db.Column(db.Integer, db.ForeignKey('user.id'))
-    course_id = db.Column(db.Integer, db.ForeignKey('course.id'))
+    staff_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    course_id = db.Column(db.Integer, db.ForeignKey('course.id'), nullable=False)
     applied_at = db.Column(db.DateTime, default=datetime.utcnow)
     approved = db.Column(db.Boolean, default=False)
     approved_at = db.Column(db.DateTime)
@@ -166,8 +226,8 @@ class SupportStaff(db.Model):
 
 class CourseTranscript(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    course_id = db.Column(db.Integer, db.ForeignKey('course.id'))
-    content_id = db.Column(db.Integer, db.ForeignKey('course_content.id'))
+    course_id = db.Column(db.Integer, db.ForeignKey('course.id'), nullable=False)
+    content_id = db.Column(db.Integer, db.ForeignKey('course_content.id'), nullable=False)
     transcript_text = db.Column(db.Text, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -201,7 +261,13 @@ class TokenBlacklist(db.Model):
     expires = db.Column(db.DateTime, nullable=False)
     blacklisted_on = db.Column(db.DateTime, default=datetime.utcnow)
 
-    
+
+app.app_context().push()
+db.create_all()
+
+# routes ##############################################################################################################
+
+
 def is_token_blacklisted(jti):
     return TokenBlacklist.query.filter_by(jti=jti).first() is not None
 
@@ -216,14 +282,36 @@ def revoked_token_response(jwt_header, jwt_payload):
     return jsonify({"msg": "Token has been revoked"}), 401
 
 
+@app.route('/open', methods=['GET'])
+def open():
+    courses = Course.query.all()
+    courses = [{"id": course.id, "name": course.name} for course in courses]
+    return jsonify({"message": "Anyone can view this page", "courses":courses}), 200  
+
+
 @app.route('/refresh', methods=['POST'])
 @jwt_required(refresh=True)
 def refresh():
-    user_id = get_jwt_identity().get("id")
-    new_access_token = create_access_token(identity={"id": user_id})
+    user_id = get_jwt_identity()
+    user = User.query.get_or_404(user_id)
+    new_access_token = user.generate_access_token()
     return jsonify({"access_token": new_access_token}), 200
     
+
+@app.route('/delete', methods=['DELETE'])
+@jwt_required()
+def delete():
+    data = request.get_json()
+    course_id = data.get('id')
+    user= User.query.get_or_404(get_jwt_identity())
+    if user.role != 'admin':
+        return jsonify({"error": "Unauthorized request denied."}), 403
+    db.session.query(CourseContent).filter(CourseContent.course_id == course_id).delete()  
+    db.session.query(Course).filter(Course.id == course_id).delete()
+    db.session.commit()
+    return jsonify({"message": "Course deleted successfully."}), 200
     
+
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def index(path):
@@ -322,7 +410,7 @@ def logout():
 @app.route('/approve/support_staffs', methods=['PUT'], endpoint='approve_support_staffs')
 @jwt_required()
 def approve_staff():
-    user_id = get_jwt_identity().get("id")
+    user_id = get_jwt_identity()
     user = User.query.get_or_404(user_id)
     if user.role != 'admin':
         return jsonify({"error": "Unauthorized request denied."}), 403
@@ -349,7 +437,7 @@ def approve_staff():
 @app.route('/apply/support_staff', methods=['POST'])
 @jwt_required()
 def apply_support_staff():
-    user_id = get_jwt_identity().get("id")
+    user_id = get_jwt_identity()
     user = User.query.get_or_404(user_id)
     if user.role != 'support_staff':
         return jsonify({"error": "Unauthorized request. Only staff can apply to assist courses."}), 403
@@ -369,7 +457,7 @@ def apply_support_staff():
 @app.route('/approve/course_enrollment', methods=['PUT'], endpoint='approve_course_enrollment')
 @jwt_required()
 def approve_enrollment():
-    user_id = get_jwt_identity().get("id")
+    user_id = get_jwt_identity()
     user = User.query.get_or_404(user_id)
     if user.role not in ['support_staff', 'admin']:
         return jsonify({"error": "Unauthorized request denied."}), 403
@@ -401,7 +489,7 @@ def approve_enrollment():
 @app.route('/register/course', methods=['POST'])
 @jwt_required()
 def register_course():
-    user_id = get_jwt_identity().get("id")
+    user_id = get_jwt_identity()
     user = User.query.get_or_404(user_id)
     if user.role != 'student':
         return jsonify({"error": "Unauthorized request. Only students can register for courses."}), 403
@@ -421,7 +509,7 @@ def register_course():
 @app.route('/add/new_course', methods=['POST'])
 @jwt_required()
 def add_new_course():
-    user_id = get_jwt_identity().get("id")
+    user_id = get_jwt_identity()
     user = User.query.get_or_404(user_id)
     if user.role != 'admin':
         return jsonify({"error": "Unauthorized request. Only admin can add new courses."}), 403
@@ -441,7 +529,7 @@ def add_new_course():
 @app.route('/add_or_update/course_contents', methods=['POST'])
 @jwt_required()
 def add_or_update_course_contents():
-    user_id = get_jwt_identity().get("id")
+    user_id = get_jwt_identity()
     user = User.query.get_or_404(user_id)
     if user.role not in ['admin', 'support_staff']:
         return jsonify({"error": "Unauthorized request. Only admin or support staff can add course contents."}), 403
@@ -459,14 +547,14 @@ def add_or_update_course_contents():
         return jsonify({"error": "Invalid week. Must be an integer between 1 and 52."}), 400
     if not isinstance(title, str) or len(title) > 100:
         return jsonify({"error": "Invalid title. Must be a string with max 100 characters."}), 400
-    if not isinstance(description, str) or len(description) > 200:
-        return jsonify({"error": "Invalid description. Must be a string with max 200 characters."}), 400
+    if not isinstance(description, str):
+        return jsonify({"error": "Invalid description. Must be a string.."}), 400
     
     url_pattern = re.compile(r'^(https?://)?(www\.)?(youtube\.com|youtu\.be|vimeo\.com|drive\.google\.com)/.+')
     if not isinstance(video_link, str) or not re.match(url_pattern, video_link):
         return jsonify({"error": "Invalid video link. Must be a valid YouTube, Vimeo, or Google Drive link."}), 400
 
-    course = Course.query.get(course_id)
+    course = db.session.get(Course, course_id)
     if not course:
         return jsonify({"error": "Course not found. Select another course."}), 404
     existing_content = CourseContent.query.filter_by(course_id=course_id, week=week, title=title).first()
@@ -496,7 +584,7 @@ def allowed_file(filename):
 @app.route('/upload_course_contents', methods=['POST'])
 @jwt_required()
 def upload_course_contents():
-    user_id = get_jwt_identity().get("id")
+    user_id = get_jwt_identity()
     user = User.query.get_or_404(user_id)
     if user.role not in ['admin', 'support_staff']:
         return jsonify({"error": "Unauthorized request. Only admin or support staff can upload course contents."}), 403
@@ -512,7 +600,7 @@ def upload_course_contents():
         required_columns = {"course_id", "week", "title", "description", "video_link"}
         if not required_columns.issubset(csv_reader.fieldnames):
             return jsonify({"error": "CSV file must contain columns: course_id, week, title, description, video_link"}), 400
-        contents_to_add = []
+        new_contents = []
         for row in csv_reader:
             try:
                 course_id = int(row["course_id"])
@@ -520,16 +608,14 @@ def upload_course_contents():
                 title = row["title"].strip()
                 description = row["description"].strip()
                 video_link = row["video_link"].strip()
-                
-                course = Course.query.get(course_id)
+                  
+                course = db.session.get(Course, course_id)
                 if not course:
                     return jsonify({"error": f"Course ID {course_id} not found."}), 404
                 if week < 1 or week > 52:
                     return jsonify({"error": f"Invalid week {week}. Must be between 1 and 52."}), 400
                 if len(title) > 100:
                     return jsonify({"error": f"Title too long for week {week}. Max 100 characters."}), 400
-                if len(description) > 200:
-                    return jsonify({"error": f"Description too long for week {week}. Max 200 characters."}), 400
 
                 url_pattern = re.compile(r'^(https?://)?(www\.)?(youtube\.com|youtu\.be|vimeo\.com|drive\.google\.com)/.+')
                 if not re.match(url_pattern, video_link):
@@ -544,23 +630,79 @@ def upload_course_contents():
                     extract_video_transcripts.delay(existing_content.id)
                 else:
                     new_content = CourseContent(course_id=course_id, week=week, title=title, description=description, video_link=video_link)
-                    contents_to_add.append(new_content)
+                    db.session.add(new_content)
+                    db.session.flush()  # Flush to get the ID before commit
+                    new_contents.append(new_content)  # Store new contents
             except ValueError:
                 return jsonify({"error": "Invalid data format in CSV file."}), 400
-        if contents_to_add:
-            db.session.bulk_save_objects(contents_to_add)
-        db.session.commit()
-        for content in contents_to_add:
-            extract_video_transcripts.delay(content.id)
+        if new_contents:
+            db.session.commit()
+            for content in new_contents:
+                extract_video_transcripts.delay(content.id)
         return jsonify({"message": "Course contents uploaded successfully.  Transcript extraction started."}), 200
     except Exception as e:
         return jsonify({"error": f"Error processing CSV file: {str(e)}"}), 500
     
     
+@jwt_required()
+def add_assignment_with_questions():
+    user_id = get_jwt_identity()
+    user = User.query.get_or_404(user_id)
+    if user.role not in ['admin', 'support_staff']:
+        return jsonify({"error": "Unauthorized request. Only admin or support staff can upload assignments."}), 403
+    data = request.json
+    title = data.get('title')
+    week = data.get('week')
+    due_date = data.get('due_date')
+    course_id = data.get('course_id')
+    file = request.files['file']
+    if not (title and week and due_date and course_id and file):
+        return jsonify({'error': 'Missing required fields (title, week, due_date, course_id, csv_file)'}), 400
+    if not allowed_file(file.filename):
+        return jsonify({"error": "Invalid file type. Please upload a CSV file."}), 400
+    try:
+        due_date = datetime.strptime(due_date, '%Y-%m-%d %H:%M:%S')
+    except ValueError:
+        return jsonify({'error': 'Invalid date format. Use YYYY-MM-DD HH:MM:SS'}), 400
+    new_assignment = Assignment(course_id=course_id, title=title, week=week, due_date=due_date)
+    db.session.add(new_assignment)
+    db.session.commit()
+        
+    stream = io.StringIO(file.stream.read().decode("utf-8"))
+    csv_reader = csv.DictReader(stream)
+    question_list = []    
+    for row in csv_reader:
+        if len(row) < 3:
+            return jsonify({'error': 'Invalid CSV format. Must have at least question_text, question_type, choices, correct_answer'}), 400
+        question_text = row.get('question_text')
+        question_type = row.get('question_type')
+        choices = row.get('choices', None)
+        correct_answer = row.get('correct_answer', None)
+        # Validate question data
+        if not question_text or not question_type or not correct_answer:
+            return jsonify({'error': 'Invalid CSV format. Missing required question fields.'}), 400
+        # Convert choices to JSON array for MCQs
+        if question_type == 'mcq':
+            if choices:
+                try:
+                    choices = json.loads(choices) if isinstance(choices, str) else [c.strip() for c in choices.split(',')]
+                except json.JSONDecodeError:
+                    return jsonify({'error': 'Invalid JSON format in choices'}), 400
+            else:
+                return jsonify({'error': 'MCQ questions must have choices'}), 400
+        else:
+            choices = None  # Only MCQs have choices
+        new_question = AssignmentQuestion(assignment_id=new_assignment.id, question_text=question_text, question_type=question_type, choices=choices, correct_answer=correct_answer)
+        question_list.append(new_question)
+    db.session.bulk_save_objects(question_list)
+    db.session.commit()
+    return jsonify({'message': 'Assignment and questions added successfully', 'assignment_id': new_assignment.id}), 201
+
+    
 @app.route('/delete_course_content', methods=['DELETE'])
 @jwt_required()
 def delete_course_content():
-    user_id = get_jwt_identity().get("id")
+    user_id = get_jwt_identity()
     user = User.query.get_or_404(user_id)
     if user.role not in ['admin', 'support_staff']:
         return jsonify({"error": "Unauthorized request. Only admin or support staff can delete course content."}), 403
@@ -587,7 +729,7 @@ def delete_course_content():
 @app.route('/course_contents/<int:course_id>', methods=['GET'])
 @jwt_required()
 def course_contents(course_id):
-    user_id = get_jwt_identity().get("id")
+    user_id = get_jwt_identity()
     user = User.query.get(user_id)
     if not user:
         return jsonify({"message": "User not found."}), 404
@@ -611,12 +753,12 @@ def course_contents(course_id):
 @app.route('/dashboard/admin', methods=['GET'], endpoint="admin_dashboard")
 @jwt_required()
 def admin_dashboard():
-    user_id = get_jwt_identity().get("id")
+    user_id = get_jwt_identity()
     user = User.query.get_or_404(user_id)
     if user.role != 'admin':
         return jsonify({"error": "Unauthorized request. Only admin can access this path."}), 403    
     courses = Course.query.all()
-    courses = [{"id": course.id, "name": course.name} for course in courses]
+    courses = [{"id": course.id, "name": course.name , "prof": course.prof} for course in courses]
     pendingApprovals = db.session.query(User, Course).join(SupportStaff, User.id == SupportStaff.staff_id).join(Course, Course.id == SupportStaff.course_id).filter(SupportStaff.approved == False).all()
     pendingApprovals = [{"staff_id": staff.id, "staff_name": staff.name, "staff_email": staff.email , "course_id": course.id, "course_name": course.name} for staff, course in pendingApprovals]
     pendingEnrollments = db.session.query(User, Course).join(StudentEnrollment, User.id == StudentEnrollment.student_id).join(Course, Course.id == StudentEnrollment.course_id).filter(StudentEnrollment.approved == False).all()
@@ -627,7 +769,7 @@ def admin_dashboard():
 @app.route('/dashboard/support_staff', methods=['GET'], endpoint="support_staff_dashboard")
 @jwt_required()
 def support_staff_dashboard():
-    user_id = get_jwt_identity().get("id")
+    user_id = get_jwt_identity()
     user = User.query.get_or_404(user_id)
     if user.role != 'support_staff':
         return jsonify({"error": "Unauthorized request. Only Support Staff can access this path."}), 403    
@@ -635,7 +777,7 @@ def support_staff_dashboard():
     courses = [{"id": course.id, "name": course.name} for course in courses]
     support_courses = db.session.query(Course).join(SupportStaff).filter(SupportStaff.staff_id == user.id, SupportStaff.approved == True).all()
     support_courses_ids = {course.id for course in support_courses} 
-    support_courses = [{"id": course.id, "name": course.name} for course in support_courses]
+    support_courses = [{"id": course.id, "name": course.name,"prof":course.prof} for course in support_courses]
     pendingEnrollments = db.session.query(User, Course).join(StudentEnrollment, User.id == StudentEnrollment.student_id).join(Course, Course.id == StudentEnrollment.course_id).filter(StudentEnrollment.approved == False, Course.id.in_(support_courses_ids)).all()
     pendingEnrollments = [{"student_id": student.id, "student_name": student.name, "student_email": student.email, "course_id": course.id, "course_name": course.name} for student, course in pendingEnrollments]
     return jsonify({"courses": courses, "support_courses": support_courses, "pendingEnrollments": pendingEnrollments}), 200
@@ -644,14 +786,14 @@ def support_staff_dashboard():
 @app.route('/dashboard/student', methods=['GET'], endpoint="student_dashboard")
 @jwt_required()
 def student_dashboard(): 
-    user_id = get_jwt_identity().get("id")
+    user_id = get_jwt_identity()
     user = User.query.get_or_404(user_id)
     if user.role != 'student':
         return jsonify({"error": "Unauthorized request. Only Student can access this path."}), 403    
     courses = Course.query.all()
-    courses = [{"id": course.id, "name": course.name} for course in courses]
+    courses = [{"id": course.id, "name": course.name ,"prof":course.prof} for course in courses]
     enrolled_courses = db.session.query(Course).join(StudentEnrollment).filter(StudentEnrollment.student_id == user.id, StudentEnrollment.approved == True).all()
-    enrolled_courses = [{"id": course.id, "name": course.name} for course in enrolled_courses]
+    enrolled_courses = [{"id": course.id, "name": course.name,"prof":course.prof} for course in enrolled_courses]
     return jsonify({"courses": courses, "enrolled_courses": enrolled_courses}), 200
 
 
@@ -668,7 +810,7 @@ def start_session(user_id):
 @app.route("/delete_session/<int:session_id>", methods=["DELETE"])
 @jwt_required()
 def delete_session(session_id):
-    user_id = get_jwt_identity().get("id")
+    user_id = get_jwt_identity()
     user = User.query.get_or_404(user_id)
     session = ChatSession.query.get_or_404(session_id)
     if not session:
@@ -683,14 +825,17 @@ def delete_session(session_id):
 @app.route('/chat', methods=['POST'])
 @jwt_required()
 def chat():
-    user_id = get_jwt_identity().get("id")
+    user_id = get_jwt_identity()
     user = User.query.get_or_404(user_id)
     if user.role != 'student':
         return jsonify({"error": "Unauthorized request. Only students can access this path."}), 403
     data = request.json
     session_id = data.get("session_id")    
+    session_data = []
     if not session_id:
-        session_id = start_session(user.id)    
+        session_id = start_session(user.id) 
+        session = ChatSession.query.get_or_404(session_id)
+        session_data = [ {"id": session.id, "user_id": session.user_id, "created_at": session.created_at.strftime("%Y-%m-%d %H:%M:%S")} ]   
     query = data.get("message", "").strip()
     if not query:
         return jsonify({"error": "Message cannot be empty"}), 400
@@ -702,15 +847,20 @@ def chat():
     relevant_texts = []
     query_embedding = embed_model.encode([query])    
     for content in course_contents:
-        faiss_index_path = f"vector_dbs/course_{content.id}.faiss"
-        if os.path.exists(faiss_index_path):
+        faiss_index_path = f"{VECTOR_DB_PATH}/course_{content.id}.faiss"
+        id_map_path = f"{VECTOR_DB_PATH}/course_{content.id}_ids.npy"
+        if os.path.exists(faiss_index_path) and os.path.exists(id_map_path):
+            # Load FAISS index and stored ID mappings
             index = faiss.read_index(faiss_index_path)
-            _, indices = index.search(query_embedding, 3)
-            for idx in indices[0]:  # Iterate through matched indices
-                if idx != -1:  # Ignore invalid indices
-                    transcript = CourseTranscript.query.get(idx)
+            id_map = np.load(id_map_path).tolist()
+            _, indices = index.search(query_embedding, 3)  # Find 3 closest matches
+            for idx in indices[0]:  # Iterate over matched FAISS indices
+                if idx != -1 and idx < len(id_map):  # Ensure index is valid
+                    transcript_id = id_map[idx]  # Get the actual transcript ID
+                    transcript = CourseTranscript.query.get(transcript_id)
                     if transcript:
                         relevant_texts.append(transcript.transcript_text)
+        
         if len(relevant_texts) >= 3:
             break
 
@@ -720,6 +870,8 @@ def chat():
     else:
         retrieved_context = "No relevant transcripts found."
         use_ai_knowledge = True  # Enable AI knowledge fallback
+    
+    print(retrieved_context)
 
     try:
         if use_ai_knowledge:
@@ -756,21 +908,32 @@ def chat():
 
                         Provide an informative response based on the course material.
                     """
-        response = genai.generate_content(prompt=prompt)
+        response = model.generate_content(prompt)
     except Exception as e:
+        print(e)
         return jsonify({"error": f"AI response failed: {str(e)}"}), 500
+    response = str(response.text)
     user_chat = ChatMessage(session_id=session_id, sender="user", message=query)
     ai_chat = ChatMessage(session_id=session_id, sender="bot", message=response)
     db.session.add_all([user_chat, ai_chat])
     db.session.commit()
-    return jsonify({"response": response}), 201
+    return jsonify({"response": response, "session": session_data}), 201
 
+
+@app.route("/all_chat_sessions", methods=["GET"])
+@jwt_required()
+def all_chat_session():
+    user_id = get_jwt_identity()
+    user = User.query.get_or_404(user_id)
+    sessions = ChatSession.query.filter_by(user_id=user.id).order_by(ChatSession.created_at.desc()).all()
+    session_data = [ {"id": session.id, "user_id": session.user_id, "created_at": session.created_at.strftime("%Y-%m-%d %H:%M:%S")} for session in sessions ]
+    return jsonify({"sessions": session_data, "message": "All sessions retrieved successfully!"}), 200
 
 
 @app.route('/chat/history/<int:session_id>', methods=['GET'])
 @jwt_required()
 def get_chat_history(session_id):
-    user_id = get_jwt_identity().get("id")
+    user_id = get_jwt_identity()
     user = User.query.get_or_404(user_id)
     if user.role != 'student':
         return jsonify({"error": "Unauthorized request. Only Student can access this path."}), 403
@@ -778,7 +941,7 @@ def get_chat_history(session_id):
     if not session:
         return jsonify({"error": "Session not found."}), 404
     chat_history = ChatMessage.query.filter_by(session_id=session_id).order_by(ChatMessage.timestamp.asc()).all()
-    chat_history = [ {"id": msg.id, "sender": msg.sender, "message": msg.message, "timestamp": msg.timestamp} for msg in chat_history ]
+    chat_history = [ {"sender": msg.sender, "message": msg.message} for msg in chat_history ]
     return jsonify({"session_id": session_id, "chat_history": chat_history}), 200
 
 
