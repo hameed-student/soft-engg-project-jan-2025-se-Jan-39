@@ -1,7 +1,7 @@
 <template>
   <div class="body">
     <NavBar @fetchData="fetchData"/>
-    <AddCourseContents :course="course" :isVisible="isAddCourseContentVisible"  @close="isAddCourseContentVisible = false" />
+    <AddCourseContents :course="course" :isVisible="isAddCourseContentVisible"  @close="isAddCourseContentVisible = false;course={}" />
     <div class="container">
       <h3>Welcome Admin</h3>
       <br><br>

@@ -84,32 +84,70 @@ def generate_and_store_embeddings(content_id, text):
     np.save(id_map_path, np.array(id_map))
     return
 
-
 @celery.task(name="extract_video_transcripts")
 def extract_video_transcripts(content_id):
     with app.app_context():
         content = db.session.get(CourseContent, content_id)
         if not content:
             return {"error": "Course content not found"}
+
         # Extract video ID from YouTube URL
-        video_id_match = re.search(r"v=([a-zA-Z0-9_-]+)", content.video_link)
-        if not video_id_match:
+        youtube_patterns = [
+            r'(?:v=|/)([a-zA-Z0-9_-]{11})',  # For standard and shared URLs
+            r'(?:youtu\.be/)([a-zA-Z0-9_-]{11})',  # For shortened youtu.be URLs
+            r'(?:embed/)([a-zA-Z0-9_-]{11})'  # For embed URLs
+        ]
+
+        video_id = None
+        for pattern in youtube_patterns:
+            match = re.search(pattern, content.video_link)
+            if match:
+                video_id = match.group(1)
+                break
+
+        if not video_id:
             return {"error": "Invalid YouTube URL"}
-        video_id = video_id_match.group(1)
+
         try:
             transcript_data = YouTubeTranscriptApi.get_transcript(video_id)
             transcript_text = " ".join([t["text"] for t in transcript_data])
         except Exception as e:
             return {"error": f"Transcript extraction failed: {str(e)}"}
+
         existing_transcript = CourseTranscript.query.filter_by(content_id=content.id).first()
         if existing_transcript:
             existing_transcript.transcript_text = transcript_text
         else:
-            new_transcript = CourseTranscript(course_id=content.course_id, content_id=content.id, transcript_text=transcript_text)
+            new_transcript = CourseTranscript(
+                course_id=content.course_id, 
+                content_id=content.id, 
+                transcript_text=transcript_text
+            )
             db.session.add(new_transcript)
+        
         db.session.commit()
         generate_and_store_embeddings(content_id, transcript_text)
-        return {"message": "Transcript extracted and stored successfully"}
+        return {"message": "Transcript extracted and stored successfully"} 
+    
+def schedule_grading_task(assignment_id, due_date):
+    eta = due_date
+    check_answers.apply_async(args=[assignment_id], eta=eta)
+
+
+@celery.task(name="evaluate_assignments")
+def check_answers(assignment_id):
+    with app.app_context():
+        assignment = Assignment.query.get(assignment_id)
+        if not assignment:
+            return {'error': 'Assignment not found'}
+        questions = AssignmentQuestion.query.filter_by(assignment_id=assignment_id).all()
+        answers = StudentAnswer.query.filter_by(assignment_id=assignment_id).all()
+        correct_answers = {q.id: q.correct_answer for q in questions}
+        for answer in answers:
+            if answer.question_id in correct_answers:
+                answer.is_correct = (answer.selected_answer == correct_answers[answer.question_id])
+        db.session.commit()
+        return {'message': 'Student answers evaluated successfully'}
 
 
 class User(db.Model):
@@ -151,7 +189,7 @@ class Course(db.Model):
 
 class CourseContent(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    course_id = db.Column(db.Integer, db.ForeignKey('course.id'),nullable=False)
+    course_id = db.Column(db.Integer, db.ForeignKey('course.id'), nullable=False)
     week = db.Column(db.Integer, nullable=False)
     title = db.Column(db.String(100), nullable=False)
     description = db.Column(db.Text, nullable=True)
@@ -192,8 +230,8 @@ class StudentAnswer(db.Model):
     student_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     assignment_id = db.Column(db.Integer, db.ForeignKey('assignment.id'), nullable=False)
     question_id = db.Column(db.Integer, db.ForeignKey('assignment_question.id'), nullable=False)
-    selected_answer = db.Column(db.Text, nullable=False)
-    is_correct = db.Column(db.Boolean, nullable=False)
+    selected_answer = db.Column(db.Text, nullable=True)
+    is_correct = db.Column(db.Boolean, nullable=True)
 
     student = db.relationship('User', backref='answers')
     assignment = db.relationship('Assignment', back_populates='answers')
@@ -261,13 +299,6 @@ class TokenBlacklist(db.Model):
     expires = db.Column(db.DateTime, nullable=False)
     blacklisted_on = db.Column(db.DateTime, default=datetime.utcnow)
 
-
-app.app_context().push()
-db.create_all()
-
-# routes ##############################################################################################################
-
-
 def is_token_blacklisted(jti):
     return TokenBlacklist.query.filter_by(jti=jti).first() is not None
 
@@ -289,14 +320,6 @@ def open():
     return jsonify({"message": "Anyone can view this page", "courses":courses}), 200  
 
 
-@app.route('/refresh', methods=['POST'])
-@jwt_required(refresh=True)
-def refresh():
-    user_id = get_jwt_identity()
-    user = User.query.get_or_404(user_id)
-    new_access_token = user.generate_access_token()
-    return jsonify({"access_token": new_access_token}), 200
-    
 
 @app.route('/delete', methods=['DELETE'])
 @jwt_required()
@@ -310,8 +333,17 @@ def delete():
     db.session.query(Course).filter(Course.id == course_id).delete()
     db.session.commit()
     return jsonify({"message": "Course deleted successfully."}), 200
-    
+  
 
+@app.route('/refresh', methods=['POST'])
+@jwt_required(refresh=True)
+def refresh():
+    user_id = get_jwt_identity()
+    user = User.query.get_or_404(user_id)
+    new_access_token = user.generate_access_token()
+    return jsonify({"access_token": new_access_token}), 200
+    
+    
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def index(path):
@@ -405,6 +437,23 @@ def logout():
         db.session.add(revoked_token)
         db.session.commit()         
     return jsonify({"message": "Successfully logged out"}), 200
+
+@app.route('/profile', methods=['PUT'])
+@jwt_required()
+def profile():
+    user_id = get_jwt_identity()
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+    if user.role == 'admin':
+        return jsonify({"error": "Unautorized Request Denied."}),403
+    data = request.json
+    if 'name' in data and data['name'].strip():
+        user.name = data['name'].strip()
+    else:
+        return jsonify({"error": "Name is required"}), 400
+    db.session.commit()
+    return jsonify({"message": "Profile updated successfully", "name": user.name}), 200
 
 
 @app.route('/approve/support_staffs', methods=['PUT'], endpoint='approve_support_staffs')
@@ -558,6 +607,7 @@ def add_or_update_course_contents():
     if not course:
         return jsonify({"error": "Course not found. Select another course."}), 404
     existing_content = CourseContent.query.filter_by(course_id=course_id, week=week, title=title).first()
+    new_content = None
     if existing_content:
         existing_content.title = title
         existing_content.description = description
@@ -644,61 +694,6 @@ def upload_course_contents():
         return jsonify({"error": f"Error processing CSV file: {str(e)}"}), 500
     
     
-@jwt_required()
-def add_assignment_with_questions():
-    user_id = get_jwt_identity()
-    user = User.query.get_or_404(user_id)
-    if user.role not in ['admin', 'support_staff']:
-        return jsonify({"error": "Unauthorized request. Only admin or support staff can upload assignments."}), 403
-    data = request.json
-    title = data.get('title')
-    week = data.get('week')
-    due_date = data.get('due_date')
-    course_id = data.get('course_id')
-    file = request.files['file']
-    if not (title and week and due_date and course_id and file):
-        return jsonify({'error': 'Missing required fields (title, week, due_date, course_id, csv_file)'}), 400
-    if not allowed_file(file.filename):
-        return jsonify({"error": "Invalid file type. Please upload a CSV file."}), 400
-    try:
-        due_date = datetime.strptime(due_date, '%Y-%m-%d %H:%M:%S')
-    except ValueError:
-        return jsonify({'error': 'Invalid date format. Use YYYY-MM-DD HH:MM:SS'}), 400
-    new_assignment = Assignment(course_id=course_id, title=title, week=week, due_date=due_date)
-    db.session.add(new_assignment)
-    db.session.commit()
-        
-    stream = io.StringIO(file.stream.read().decode("utf-8"))
-    csv_reader = csv.DictReader(stream)
-    question_list = []    
-    for row in csv_reader:
-        if len(row) < 3:
-            return jsonify({'error': 'Invalid CSV format. Must have at least question_text, question_type, choices, correct_answer'}), 400
-        question_text = row.get('question_text')
-        question_type = row.get('question_type')
-        choices = row.get('choices', None)
-        correct_answer = row.get('correct_answer', None)
-        # Validate question data
-        if not question_text or not question_type or not correct_answer:
-            return jsonify({'error': 'Invalid CSV format. Missing required question fields.'}), 400
-        # Convert choices to JSON array for MCQs
-        if question_type == 'mcq':
-            if choices:
-                try:
-                    choices = json.loads(choices) if isinstance(choices, str) else [c.strip() for c in choices.split(',')]
-                except json.JSONDecodeError:
-                    return jsonify({'error': 'Invalid JSON format in choices'}), 400
-            else:
-                return jsonify({'error': 'MCQ questions must have choices'}), 400
-        else:
-            choices = None  # Only MCQs have choices
-        new_question = AssignmentQuestion(assignment_id=new_assignment.id, question_text=question_text, question_type=question_type, choices=choices, correct_answer=correct_answer)
-        question_list.append(new_question)
-    db.session.bulk_save_objects(question_list)
-    db.session.commit()
-    return jsonify({'message': 'Assignment and questions added successfully', 'assignment_id': new_assignment.id}), 201
-
-    
 @app.route('/delete_course_content', methods=['DELETE'])
 @jwt_required()
 def delete_course_content():
@@ -747,7 +742,223 @@ def course_contents(course_id):
             "description": content.description,
             "video_link": content.video_link
         })
-    return jsonify({"course_contents": course_contents}), 200
+    assignments = Assignment.query.filter_by(course_id=course_id).all()
+    assignment_data = []
+    assignment_data = [{
+        "id": assignment.course_id,
+        "assignment_id": assignment.id,
+        "week": assignment.week,
+        "title": assignment.title,
+        "due_date": assignment.due_date
+    } for assignment in assignments]
+    return jsonify({"course_contents": course_contents, "assignments": assignment_data}), 200
+    
+    
+@app.route('/add_assignment/questions', methods=['POST'])    
+@jwt_required()
+def add_assignment_with_questions():
+    user_id = get_jwt_identity()
+    user = User.query.get_or_404(user_id)
+    if user.role not in ['admin', 'support_staff']:
+        return jsonify({"error": "Unauthorized request. Only admin or support staff can upload assignments."}), 403
+    data = request.form
+    title = data.get('title')
+    week = data.get('week')
+    due_date = data.get('due_date')
+    course_id = data.get('course_id')
+    file = request.files['file']
+    if not (title and week and due_date and course_id and file):
+        return jsonify({'error': 'Missing required fields (title, week, due_date, course_id, csv_file)'}), 400
+    if not allowed_file(file.filename):
+        return jsonify({"error": "Invalid file type. Please upload a CSV file."}), 400
+    try:
+        due_date = datetime.strptime(due_date, '%Y-%m-%d %H:%M:%S')
+    except ValueError:
+        return jsonify({'error': 'Invalid date format. Use YYYY-MM-DD HH:MM:SS'}), 400
+    new_assignment = Assignment(course_id=course_id, title=title, week=week, due_date=due_date)
+    db.session.add(new_assignment)
+    db.session.commit()
+        
+    stream = io.StringIO(file.stream.read().decode("utf-8"))
+    csv_reader = csv.DictReader(stream)
+    question_list = []    
+    for row in csv_reader:
+        if len(row) < 3:
+            return jsonify({'error': 'Invalid CSV format. Must have at least question_text, question_type, choices, correct_answer'}), 400
+        question_text = row.get('question_text')
+        question_type = row.get('question_type')
+        choices = row.get('choices', None)
+        correct_answer = row.get('correct_answer', None)
+        # Validate question data
+        if not question_text or not question_type or not correct_answer:
+            return jsonify({'error': 'Invalid CSV format. Missing required question fields.'}), 400
+        # Convert choices to JSON array for MCQs
+        if question_type == 'mcq':
+            if choices:
+                try:
+                    choices = json.loads(choices) if choices.startswith("[") and choices.endswith("]")  else [c.strip() for c in choices.split(',')]
+                except json.JSONDecodeError:
+                    return jsonify({'error': 'Invalid JSON format in choices'}), 400
+            else:
+                return jsonify({'error': 'MCQ questions must have choices'}), 400
+        else:
+            choices = None  # Only MCQs have choices
+        new_question = AssignmentQuestion(assignment_id=new_assignment.id, question_text=question_text, question_type=question_type, choices=choices, correct_answer=correct_answer)
+        question_list.append(new_question)
+    db.session.bulk_save_objects(question_list)
+    db.session.commit()
+    schedule_grading_task(new_assignment.id, due_date)
+    return jsonify({'message': 'Assignment and questions added successfully', 'assignment_id': new_assignment.id}), 201
+
+
+@app.route('/update_assignment/<int:assignment_id>', methods=['PUT'])
+@jwt_required()
+def update_assignment(assignment_id):
+    user_id = get_jwt_identity()
+    user = User.query.get_or_404(user_id)
+    if user.role not in ['admin', 'support_staff']:
+        return jsonify({"error": "Unauthorized request."}), 403
+    assignment = Assignment.query.get_or_404(assignment_id)
+    old_due_date = assignment.due_date
+    data = request.form
+    assignment.title = data.get('title', assignment.title)
+    assignment.week = data.get('week', assignment.week)
+    assignment.due_date = datetime.strptime(data.get('due_date', assignment.due_date.strftime('%Y-%m-%d %H:%M:%S')), '%Y-%m-%d %H:%M:%S')
+    db.session.commit()    
+    if old_due_date != assignment.due_date:
+        schedule_grading_task(assignment.id, assignment.due_date)
+    return jsonify({'message': 'Assignment updated successfully'}), 200
+
+
+@app.route('/delete_assignment/<int:assignment_id>', methods=['DELETE'])
+@jwt_required()
+def delete_assignment(assignment_id):
+    user_id = get_jwt_identity()
+    user = User.query.get_or_404(user_id)
+    if user.role not in ['admin', 'support_staff']:
+        return jsonify({"error": "Unauthorized request."}), 403
+    assignment = Assignment.query.get_or_404(assignment_id)
+    db.session.delete(assignment)
+    db.session.commit()
+    return jsonify({'message': 'Assignment deleted successfully'}), 200
+
+@app.route('/add_new_assignment_question/<int:assignment_id>', methods=['POST'])
+@jwt_required()
+def add_question_to_assignment(assignment_id):
+    user_id = get_jwt_identity()
+    user = User.query.get_or_404(user_id)
+    if user.role not in ['admin', 'support_staff']:
+        return jsonify({"error": "Unauthorized request."}), 403
+    assignment = Assignment.query.get_or_404(assignment_id)
+    data = request.json
+    question_text = data.get('question_text')
+    question_type = data.get('question_type')
+    choices = data.get('choices', None)
+    correct_answer = data.get('correct_answer')
+    if not question_text or not question_type or not correct_answer:
+        return jsonify({'error': 'Missing required question fields'}), 400
+    if question_type == 'mcq' and choices:
+        try:
+            choices = json.loads(choices) if choices.startswith("[") and choices.endswith("]")  else [c.strip() for c in choices.split(',')]
+        except json.JSONDecodeError:
+            return jsonify({'error': 'Invalid JSON format in choices'}), 400
+    else:
+        choices = None
+    new_question = AssignmentQuestion(assignment_id=assignment.id, question_text=question_text, question_type=question_type, choices=choices, correct_answer=correct_answer)
+    db.session.add(new_question)
+    db.session.commit()
+    return jsonify({'message': 'New question added successfully'}), 201
+
+
+@app.route('/update_assignment_question/<int:question_id>', methods=['PUT'])
+@jwt_required()
+def update_question(question_id):
+    user_id = get_jwt_identity()
+    user = User.query.get_or_404(user_id)
+    if user.role not in ['admin', 'support_staff']:
+        return jsonify({"error": "Unauthorized request."}), 403
+    question = AssignmentQuestion.query.get_or_404(question_id)
+    data = request.json
+    question.question_text = data.get('question_text', question.question_text)
+    question.question_type = data.get('question_type', question.question_type)
+    question.correct_answer = data.get('correct_answer', question.correct_answer)
+    if question.question_type == 'mcq':
+        choices = data.get('choices')
+        if choices:
+            try:
+                question.choices = json.loads(choices) if choices.startswith("[") and choices.endswith("]")  else [c.strip() for c in choices.split(',')]
+            except json.JSONDecodeError:
+                return jsonify({'error': 'Invalid JSON format in choices'}), 400
+    db.session.commit()
+    return jsonify({'message': 'Question updated successfully'}), 200
+
+
+@app.route('/delete_assignment_question/<int:question_id>', methods=['DELETE'])
+@jwt_required()
+def delete_question(question_id):
+    user_id = get_jwt_identity()
+    user = User.query.get_or_404(user_id)
+    if user.role not in ['admin', 'support_staff']:
+        return jsonify({"error": "Unauthorized request."}), 403
+    question = AssignmentQuestion.query.get_or_404(question_id)
+    db.session.delete(question)
+    db.session.commit()
+    return jsonify({'message': 'Question deleted successfully'}), 200
+
+
+@app.route('/submit_or_update_answers', methods=['POST'])
+@jwt_required()
+def submit_or_update_answers():
+    user_id = get_jwt_identity()
+    student = User.query.get_or_404(user_id)
+    if student.role != 'student':
+        return jsonify({"error": "Unauthorized request. Only students can submit or update answers."}), 403
+    data = request.json
+    assignment_id = data.get('assignment_id')
+    answers = data.get('answers')  
+    if not (assignment_id and answers):
+        return jsonify({'error': 'Missing required fields (assignment_id, answers)'}), 400
+    assignment = Assignment.query.get(assignment_id)  
+    if not assignment:
+        return jsonify({'error': 'Assignment has not been found.'}), 404     
+    for ans in answers:
+        question_id = ans.get('question_id')
+        selected_answer = ans.get('selected_answer', None)
+        question = AssignmentQuestion.query.filter_by(id=question_id, assignment_id=assignment_id).first()
+        if not question:
+            return jsonify({'error': 'Question is not valid for this assignment.'}), 404  
+        existing_answer = StudentAnswer.query.filter_by(student_id=user_id, assignment_id=assignment_id, question_id=question_id).first()
+        if existing_answer:
+            existing_answer.selected_answer = selected_answer
+        else:
+            new_answer = StudentAnswer(student_id=user_id, assignment_id=assignment_id, question_id=question_id, selected_answer=selected_answer)
+            db.session.add(new_answer)
+    db.session.commit()
+    return jsonify({'message': 'Answers processed and submitted successfully'}), 200 
+
+
+@app.route('/assignment/questions/<int:assignment_id>', methods=['GET'])
+@jwt_required()
+def get_assignment_questions(assignment_id):
+    user_id = get_jwt_identity()
+    user = User.query.get_or_404(user_id)
+    
+    assignment = Assignment.query.get(assignment_id)    
+    if not assignment:
+        return jsonify({'error': 'Assignment not found.'}), 404
+    questions = AssignmentQuestion.query.filter_by(assignment_id=assignment_id).all()
+    submitted_answers = {}
+    if user.role == 'student':
+        submitted_answers = {answer.question_id: {"selected_answer": answer.selected_answer, "is_correct": answer.is_correct}  for answer in StudentAnswer.query.filter_by(student_id=user_id, assignment_id=assignment_id).all()}
+
+    questions_data = []
+    for question in questions:
+        question_info = {"question_id": question.id, "question_text": question.question_text, "question_type": question.question_type, "submitted_answer": submitted_answers.get(question.id, {}).get("selected_answer", None), "is_correct": submitted_answers.get(question.id, {}).get("is_correct", None)}
+        if question.question_type == "mcq":
+            question_info["choices"] = question.choices
+        questions_data.append(question_info)
+
+    return jsonify({"questions": questions_data}), 200
 
 
 @app.route('/dashboard/admin', methods=['GET'], endpoint="admin_dashboard")
@@ -870,9 +1081,6 @@ def chat():
     else:
         retrieved_context = "No relevant transcripts found."
         use_ai_knowledge = True  # Enable AI knowledge fallback
-    
-    print(retrieved_context)
-
     try:
         if use_ai_knowledge:
             prompt = f"""
