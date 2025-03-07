@@ -74,32 +74,28 @@
             <div class="stat-card">
                 <div class="stat-icon clr-b">📚</div>
                 <p class="stat-title">TOTAL COURSES</p>
-                <h2 class="stat-value">42</h2>
-                <p class="stat-description">12 new courses this month</p>
+                <h2 class="stat-value">{{ data.total_courses }}</h2>
             </div>
 
             <!-- Students Card -->
             <div class="stat-card">
                 <div class="stat-icon clr-b">👨‍🎓</div>
                 <p class="stat-title">TOTAL STUDENTS</p>
-                <h2 class="stat-value">1,200</h2>
-                <p class="stat-description">87 new enrollments this week</p>
+                <h2 class="stat-value">{{ data.total_students }}</h2>
             </div>
 
             <!-- Teachers Card -->
             <div class="stat-card">
                 <div class="stat-icon clr-b">👨‍🏫</div>
                 <p class="stat-title">TOTAL SUPPORT STAFF</p>
-                <h2 class="stat-value">18</h2>
-                <p class="stat-description">2 joined this month</p>
+                <h2 class="stat-value">{{data.total_support_staff}}</h2>
             </div>
 
             <!-- weeks Card -->
             <div class="stat-card">
                 <div class="stat-icon clr-b">⏳</div>
                 <p class="stat-title">TOTAL WEEKS</p>
-                <h2 class="stat-value">123</h2>
-                <p class="stat-description">+15% from last month</p>
+                <h2 class="stat-value">{{ data.total_weeks }}</h2>
             </div>
         </div>
     </div>
@@ -123,7 +119,8 @@
       
     </div>
     <br><br><br>
-<Dashboard/>
+<Dashboard :courses="courses" :pendingApprovals="pendingApprovals" :pendingEnrollments="pendingEnrollments" 
+:data="data"/>
   </div>
 </template>
 
@@ -145,6 +142,14 @@ export default {
       courses: [],
       course:{},
       isAddCourseContentVisible: false,
+      data: {
+        total_courses: 0,
+        total_students: 0,
+        total_support_staff: 0,
+        total_weeks: 0,
+        enrolled:0,
+        approvals:0
+      }
     };
   },
   methods: {

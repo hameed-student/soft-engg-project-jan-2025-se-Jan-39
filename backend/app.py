@@ -974,7 +974,17 @@ def admin_dashboard():
     pendingApprovals = [{"staff_id": staff.id, "staff_name": staff.name, "staff_email": staff.email , "course_id": course.id, "course_name": course.name} for staff, course in pendingApprovals]
     pendingEnrollments = db.session.query(User, Course).join(StudentEnrollment, User.id == StudentEnrollment.student_id).join(Course, Course.id == StudentEnrollment.course_id).filter(StudentEnrollment.approved == False).all()
     pendingEnrollments = [{"student_id": student.id, "student_name": student.name, "student_email": student.email, "course_id": course.id, "course_name": course.name} for student, course in pendingEnrollments]
-    return jsonify({"courses": courses, "pendingApprovals": pendingApprovals, "pendingEnrollments": pendingEnrollments}), 200
+    data={"total_courses": len(courses), "total_students": User.query.filter_by(role='student').count(), "total_support_staff": User.query.filter_by(role='support_staff').count(), "total_weeks": CourseContent.query.with_entities(CourseContent.week).distinct().count()
+         , "enrolled":User.query.join(StudentEnrollment, User.id == StudentEnrollment.student_id).count(),
+         "approvals":len(SupportStaff.query.all()) }
+    for course in courses:
+        students=User.query.join(StudentEnrollment, User.id == StudentEnrollment.student_id).filter(StudentEnrollment.course_id == course["id"]).count()
+        course["students"]=students
+        support_staff=User.query.join(SupportStaff, User.id == SupportStaff.staff_id).filter(SupportStaff.course_id == course["id"], SupportStaff.approved==True ).count() 
+        course["support_staff"]=support_staff
+        course["weeks"]=CourseContent.query.filter_by(course_id=course["id"]).count()
+    
+    return jsonify({ "data": data, "courses": courses, "pendingApprovals": pendingApprovals, "pendingEnrollments": pendingEnrollments}), 200     
 
 
 @app.route('/dashboard/support_staff', methods=['GET'], endpoint="support_staff_dashboard")

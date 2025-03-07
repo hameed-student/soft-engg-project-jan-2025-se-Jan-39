@@ -36,7 +36,7 @@
     
     <div class="graph-container">
       <!-- Fourth graph: Number of weeks vs course name (Pie Chart) -->
-      <h3>Course Duration (Weeks)</h3>
+      <h3>Course Content Duration (Weeks)</h3>
       <div class="chart-wrapper pie-wrapper">
         <Pie
           :data="weekData"
@@ -46,7 +46,6 @@
     </div>
   </div>
 </template>
-
 <script>
 import { defineComponent } from 'vue';
 import {
@@ -78,6 +77,13 @@ ChartJS.register(
 
 export default defineComponent({
   name: 'Dashboard',
+  props:{
+    courses: Array,
+    pendingApprovals: Array,  
+    pendingEnrollments: Array,
+    data: Object
+  },
+
   components: {
     Bar,
     Line,
@@ -85,19 +91,7 @@ export default defineComponent({
   },
   data() {
     return {
-      // Data for the first bar chart (Enrolled students per course)
-      enrollmentData: {
-        labels: ['Math', 'Science', 'History', 'Art', 'Music'], // Course names
-        datasets: [
-          {
-            label: 'Enrolled Students',
-            data: [100, 150, 90, 70, 120], // Number of enrolled students per course
-            backgroundColor: '#42A5F5', // Color for the bars
-            borderColor: '#1E88E5',
-            borderWidth: 1,
-          },
-        ],
-      },
+      
 
       // Options for the first bar chart
       barChartOptions: {
@@ -148,23 +142,7 @@ export default defineComponent({
       },
 
       // Data for the second stacked bar chart (Approved vs Unapproved Students)
-      approvalData: {
-        labels: ['enrolments', 'support approvals' ],
-        datasets: [
-          {
-            label: 'Approved',
-            data: [30, 50, 40, 70, 20], // Approved students
-            backgroundColor: '#66BB6A',
-            stack: 'approval',
-          },
-          {
-            label: 'Unapproved',
-            data: [70, 50, 60, 30, 80], // Unapproved students
-            backgroundColor: '#EF5350',
-            stack: 'approval',
-          },
-        ],
-      },
+      
 
       // Options for the second stacked bar chart
       stackedBarOptions: {
@@ -210,22 +188,7 @@ export default defineComponent({
       },
       
       // Data for the third chart - Line chart showing support staff per course
-      staffData: {
-        labels: ['Math', 'Science', 'History', 'Art', 'Music'],
-        datasets: [
-          {
-            label: 'Support Staff',
-            data: [5, 8, 4, 3, 6],
-            fill: false,
-            borderColor: '#7E57C2',
-            tension: 0.1,
-            pointBackgroundColor: '#5E35B1',
-            pointBorderColor: '#ffffff',
-            pointBorderWidth: 2,
-            pointRadius: 5
-          }
-        ]
-      },
+      
       
       // Options for the line chart
       lineChartOptions: {
@@ -269,24 +232,7 @@ export default defineComponent({
         }
       },
       
-      // Data for the fourth chart - Pie chart showing course duration in weeks
-      weekData: {
-        labels: ['Math', 'Science', 'History', 'Art', 'Music'],
-        datasets: [
-          {
-            data: [12, 16, 10, 8, 14],
-            backgroundColor: [
-              '#FF7043', 
-              '#26C6DA', 
-              '#FFA726', 
-              '#66BB6A',
-              '#9575CD'
-            ],
-            borderColor: '#ffffff',
-            borderWidth: 2
-          }
-        ]
-      },
+      
       
       // Options for the pie chart
       pieChartOptions: {
@@ -310,33 +256,125 @@ export default defineComponent({
       }
     };
   },
-});
-</script>
+  computed: {
+    courseLabels1() {
+      return this.courses ? this.courses.map(course => course.name) : [];
+    },
+    students(){
+      return this.courses ? this.courses.map(course => course.students) : [];
+    },
+    enrollmentData() {
+      return {
+        labels: this.courseLabels1,
+        datasets: [
+          {
+            label: 'Enrolled Students',
+            data: this.students, // Number of enrolled students per course
+            backgroundColor: '#42A5F5', // Color for the bars
+            borderColor: '#1E88E5',
+            borderWidth: 1,
+          },
+        ],
+      };
+    },
+    gpendingApprovals(){
+      return this.pendingApprovals.length;
+    },
+    gpendingEnrollments(){
+      return this.pendingEnrollments.length;
+    },
 
-<style scoped>
+    approvalData() {
+      return{
+        labels: [ 'course approvals for support','student enrolments' ],
+        datasets: [
+          {
+            label: 'Approved',
+            
+            data: [this.data.approvals-this.gpendingApprovals,this.data.enrolled-this.gpendingEnrollments], // Approved students
+            backgroundColor: '#66BB6A',
+            stack: 'approval',
+          },
+          {
+            label: 'Pending',
+            data: [this.gpendingApprovals,this.gpendingEnrollments], // Unapproved students
+            backgroundColor: '#EF5350',
+            stack: 'approval',
+          },
+        ],
+      };
+    },
+    support(){
+      return this.courses ? this.courses.map(course => course.support_staff) : [];
+    },
+    staffData() {return{
+        labels: this.courseLabels1,
+        datasets: [
+          {
+            label: 'Support Staff',
+            data: this.support, // Number of support staff per course
+            fill: false,
+            borderColor: '#7E57C2',
+            tension: 0.1,
+            pointBackgroundColor: '#5E35B1',
+            pointBorderColor: '#ffffff',
+            pointBorderWidth: 2,
+            pointRadius: 5
+          }
+        ]
+      };},
+      // Data for the fourth chart - Pie chart showing course duration in weeks
+      weeks(){
+        return this.courses ? this.courses.map(course => course.weeks) : [];
+      },
+      weekData() {return{
+        labels: this.courseLabels1,
+        datasets: [
+          {
+            data: this.weeks,
+            backgroundColor: [
+              '#FF7043', 
+              '#26C6DA', 
+              '#FFA726', 
+              '#66BB6A',
+              '#9575CD'
+            ],
+            borderColor: '#ffffff',
+            borderWidth: 2
+          }
+        ]
+      };}
+
+
+  }
+  }
+);
+</script><style scoped>
 @import '@/assets/card.css';
+
+.charts-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 20px;
+  padding: 20px;
+}
+
 .graph-container {
-  margin: 20px;
   padding: 20px;
   border: 1px solid #eaeaea;
   border-radius: 8px;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
   background-color: white;
-  overflow: hidden; /* Prevent content from spilling out */
-  min-width: 80%;
-  
-
 }
 
 .chart-wrapper {
   position: relative;
-  height: 350px; /* Fixed height for the chart */
+  height: 350px;
   width: 100%;
-  margin-bottom: 15px; /* Add space at the bottom */
 }
 
 .pie-wrapper {
-  height: 400px; /* Slightly taller for the pie chart and its legend */
+  height: 400px;
 }
 
 h3 {
@@ -345,15 +383,9 @@ h3 {
   color: #333;
 }
 
-@media (min-width: 992px) {
-  .graph-container {
-    width: calc(50% - 40px);
-    
-    vertical-align: top;
-  }
-  .box{
-    display:flex;
-    justify-content: center;
+@media (max-width: 991px) {
+  .charts-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>
