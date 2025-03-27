@@ -11,7 +11,7 @@
           <div v-for="course in enrolled_courses" :key="course.id" class="stat-card" @click="goToCourse(course)">
             <div class="stat-icon clr-b">📚</div>
             <h2 class="stat-value">{{ course.name }}</h2>
-            <p class="stat-description"> Proffessor Name : {{ course.prof }}</p>
+            <p class="stat-description"> Professor Name : {{ course.prof }}</p>
           </div>
         </div>
         <p v-else class="box">No enrolled courses found.</p>
