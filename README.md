@@ -34,7 +34,14 @@ flask db upgrade
 python admin.py
 python app.py
 
-Step 6: Access the Application
+step 6: run celery and redis
+start wsl or any Linux based terminal
+run the following commands 
+redis-server
+In a fresh new wsl terminal run
+celery -A app.celery worker --beat --loglevel=info
+
+Step 7: Access the Application
 Open your web browser and go to http://localhost:5000 to access the application.
 alternatively you can access via localhost:5173 after running npm run dev inside frontend directory
 
