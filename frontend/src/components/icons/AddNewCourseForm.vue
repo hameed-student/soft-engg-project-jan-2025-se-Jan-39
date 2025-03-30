@@ -2,7 +2,7 @@
   <div v-if="isVisible" class="modal-overlay" @click.self="closeAddCourse">
     <div class="container">
       <div class="box">
-        <span class="close-button" @click="$emit('close')">&times;</span>
+        <span   @click="$emit('close')">&times;</span>
         <h1>Add New Course</h1>
         <form @submit.prevent="validateAndSubmit">
           <div class="scrollable">

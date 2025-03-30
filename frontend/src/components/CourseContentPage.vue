@@ -1,14 +1,14 @@
 <template>
-  <NavBar @fetchData="fetchCourseContents" />
+  <NavBar @fetchData="fetchCourseContents" :courses="courses" />
   <div class="course-page">
     <!-- Sidebar (20%) -->
     <div class="sidebar">
-      <h3>Course Contents</h3>
-      <button v-if="user.role != 'student'" class="add-assignment-btn" @click="openAddAssignment(false)">📰 Add Assignment</button>
+      <h2>Course Contents</h2>
+      <button v-if="user.role == 'admin'" class="add-assignment-btn dlt" @click="deleteCourse">🗑 Delete This Course</button>
+      <button v-if="user.role != 'student'" class="add-assignment-btn" @click="openAddAssignment(false)">➕ Add Assignment</button>
       <AddAssignments :isVisible="showAssignmentModal" :isUpdation="isUpdation" :assignmentData="this.assignmentData" @close="showAssignmentModal = false" @refresh="fetchCourseContents" />
-    <!--  <button v-if="user.role != 'student'" class="add-assignment-btn" @click="openUpdateCourse(false)">⚙ Add New Content</button>
+      <button v-if="user.role != 'student'" class="add-assignment-btn" @click="openUpdateCourse(false)">⚙ Add New Content</button>
       <AddCourseContents :isVisible="showCourseContentModal" :isUpdation="isCourseUpdation" :contentData="this.contentData" @close="showCourseContentModal = false" @refresh="fetchCourseContents" />
-    -->
       <AddQuestionForm :isVisible="showQuestionModal" :isUpdation="isQuestionUpdation" :assignmentId="this.assignmentId" :questionData="this.questionData" @close="showQuestionModal = false" @refresh="fetchAssignmentDetails(assignmentId)" />
       <div :style="{ height: user.role === 'student' ? '85vh' : '55vh', overflowY: 'auto' }">
       <ul>
@@ -17,16 +17,14 @@
             <span>Week {{ week.week }}</span>
             <span class="arrow" :class="{ rotated: activeWeek === week.week }">▼</span>
           </div>
-          <ul v-show="activeWeek === week.week" class="content-list"> 
-            <div class="box">
+          <ul v-show="activeWeek === week.week" class="content-list">
             <li v-for="content in week.contents" :key="content.id" class="content-item">
               <span @click="selectContent(content)" class="content-title">
                 {{ content.title }}
               </span>
-              <button v-if="user.role !== 'student' && content.assignment_id == null"  @click="deleteCourseContent(content.id, week.week, content.title)">❌</button>
-              <button v-if="user.role !== 'student' && content.assignment_id != null"   @click="deleteAssignment(content.assignment_id, week.week, content.title)">❌</button>
+              <button v-if="user.role !== 'student' && !content.assignment_id" class="delete-btn" @click="deleteCourseContent(content.id, week.week, content.title)">🗑</button>
+              <button v-if="user.role !== 'student' && content.assignment_id" class="delete-btn" @click="deleteAssignment(content.assignment_id, week.week, content.title)">🗑</button>
             </li>
-            </div>
           </ul>
         </li>
       </ul>
@@ -101,7 +99,7 @@ export default {
   components: { NavBar, AddAssignments, AddCourseContents, AddQuestionForm },
   data() {
     return {
-      user: JSON.parse(localStorage.getItem('user')) || { name: "Admin", role: "admin" },
+      user: JSON.parse(localStorage.getItem('user')) || "",
       weeks: [],
       activeWeek: null,
       selectedContent: null,
@@ -218,14 +216,24 @@ export default {
       }
     },
 
+    async deleteCourse() {
+      if (!confirm(`Are you sure you want to delete the Entire Course?`)) {
+        return;
+      }
+      try {
+        await api.delete(`/delete_course/course/${this.$route.query.id}`);
+        this.$router.push(`/admin/dashboard/${this.user.name}`);
+      } catch (error) {
+        console.error("Error deleting course:", error);
+      }
+    },
+
     async deleteCourseContent(contentId, week, title) {
       if (!confirm(`Are you sure you want to delete "${title}" from Week ${week}?`)) {
         return;
       }
       try {
-        await api.delete(`/delete_course_content`,{headers: { 'Content-Type': 'application/json' }, data: { course_id: contentId 
-          ,week: week, title: title
-        }});
+        await api.delete(`/delete_course_content/${contentId}`);
         this.fetchCourseContents();
       } catch (error) {
         console.error("Error deleting content:", error);

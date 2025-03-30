@@ -1,5 +1,6 @@
 from flask import Flask, send_from_directory, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy.orm import joinedload
 from flask_migrate import Migrate
 from flask_jwt_extended import JWTManager, jwt_required, get_jwt, get_jwt_identity, create_access_token, create_refresh_token
 from flask_cors import CORS
@@ -11,7 +12,8 @@ import numpy as np
 import google.generativeai as genai
 from youtube_transcript_api import YouTubeTranscriptApi
 from sentence_transformers import SentenceTransformer
-import os, re, io, csv, json, faiss
+import os, re, io, csv, json, faiss, uuid
+from sklearn.metrics.pairwise import cosine_similarity
 
 
 app = Flask(__name__, static_folder='dist')
@@ -62,27 +64,75 @@ def clean_expired_blacklisted_tokens():
     return
 
 
+@celery.task(name="delete_embeddings")
+def delete_embeddings(content_ids, is_course_deletion=False):
+    for content_id in content_ids:
+        faiss_index_path = f"{VECTOR_DB_PATH}/course_{content_id}.faiss"
+        id_map_path = f"{VECTOR_DB_PATH}/course_{content_id}_ids.json"
+        metadata_path = f"{VECTOR_DB_PATH}/course_{content_id}_metadata.json"
+        for file_path in [faiss_index_path, id_map_path, metadata_path]:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+        message= f"Course Content deleted successfully...for content {content_id}"
+    if is_course_deletion:
+        message = "Entire-Course content Embeddings deleted successfully..."
+    return {'message': message}
+    
+
 def generate_and_store_embeddings(content_id, text):
-    embedding = embed_model.encode([text])  # Shape: (1, dim)
-    faiss_index_path = f"{VECTOR_DB_PATH}/course_{content_id}.faiss"
-    id_map_path = f"{VECTOR_DB_PATH}/course_{content_id}_ids.npy"
-    # Ensure directory exists
-    os.makedirs(VECTOR_DB_PATH, exist_ok=True)
-    if os.path.exists(faiss_index_path):
-        # Load existing index
-        index = faiss.read_index(faiss_index_path)
-        id_map = np.load(id_map_path).tolist()
-    else:
-        # Create a new index
-        dim = embedding.shape[1]  # Get embedding dimension
+    """Generates and stores embeddings for a given content ID."""
+    try:
+        # Fetch course content from DB
+        content = db.session.query(CourseContent).options(joinedload(CourseContent.course)).filter_by(id=content_id).first()
+        if not content:
+            return {'error': f"Content ID {content_id} not found"}
+        if not text.strip():
+            return {'error': f"No transcript found for content {content_id}"}
+        # Split text into chunks
+        chunk_size = 256
+        chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
+        if not chunks:
+            return {'error': f"No valid text chunks for content {content_id}"}
+        # Define file paths
+        faiss_index_path = f"{VECTOR_DB_PATH}/course_{content_id}.faiss"
+        id_map_path = f"{VECTOR_DB_PATH}/course_{content_id}_ids.json"
+        metadata_path = f"{VECTOR_DB_PATH}/course_{content_id}_metadata.json"
+        # Ensure directory exists
+        os.makedirs(VECTOR_DB_PATH, exist_ok=True)
+        # **Delete old files if they exist**
+        for file_path in [faiss_index_path, id_map_path, metadata_path]:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+        # Generate embeddings in a batch
+        embeddings = embed_model.encode(chunks)  # Batch encoding
+        # Create FAISS index
+        dim = embeddings.shape[1]
         index = faiss.IndexFlatL2(dim)
+        # Store new embeddings
         id_map = []
-    index.add(embedding)  # Add new embedding
-    id_map.append(content_id)  # Store mapping of FAISS index to content_id
-    # Save the updated index and ID mapping
-    faiss.write_index(index, faiss_index_path)
-    np.save(id_map_path, np.array(id_map))
-    return
+        metadata = {}
+        for chunk, embedding in zip(chunks, embeddings):
+            chunk_id = str(uuid.uuid4())
+            index.add(np.array(embedding).reshape(1, -1))
+            id_map.append(chunk_id)
+            metadata[chunk_id] = {
+                "content_id": content.id,
+                "course_name": content.course.name,
+                "title": content.title,
+                "week": content.week,
+                "chunk": chunk,
+            }
+        # Save FAISS index
+        faiss.write_index(index, faiss_index_path)
+        with open(id_map_path, "w") as f:
+            json.dump(id_map, f)
+        # Save metadata
+        with open(metadata_path, "w") as f:
+            json.dump(metadata, f, indent=4)
+        return {'message': f"Embeddings generated and stored successfully for content {content.id}"}
+    except Exception as e:
+        return {'error': f"Error processing embeddings: {str(e)} for content {content_id}"}
+
 
 @celery.task(name="extract_video_transcripts")
 def extract_video_transcripts(content_id):
@@ -90,44 +140,26 @@ def extract_video_transcripts(content_id):
         content = db.session.get(CourseContent, content_id)
         if not content:
             return {"error": "Course content not found"}
-
         # Extract video ID from YouTube URL
-        youtube_patterns = [
-            r'(?:v=|/)([a-zA-Z0-9_-]{11})',  # For standard and shared URLs
-            r'(?:youtu\.be/)([a-zA-Z0-9_-]{11})',  # For shortened youtu.be URLs
-            r'(?:embed/)([a-zA-Z0-9_-]{11})'  # For embed URLs
-        ]
-
-        video_id = None
-        for pattern in youtube_patterns:
-            match = re.search(pattern, content.video_link)
-            if match:
-                video_id = match.group(1)
-                break
-
-        if not video_id:
+        video_id_match = re.search(r"v=([a-zA-Z0-9_-]+)", content.video_link)
+        if not video_id_match:
             return {"error": "Invalid YouTube URL"}
-
+        video_id = video_id_match.group(1)
         try:
             transcript_data = YouTubeTranscriptApi.get_transcript(video_id)
             transcript_text = " ".join([t["text"] for t in transcript_data])
         except Exception as e:
             return {"error": f"Transcript extraction failed: {str(e)}"}
-
         existing_transcript = CourseTranscript.query.filter_by(content_id=content.id).first()
         if existing_transcript:
             existing_transcript.transcript_text = transcript_text
         else:
-            new_transcript = CourseTranscript(
-                course_id=content.course_id, 
-                content_id=content.id, 
-                transcript_text=transcript_text
-            )
+            new_transcript = CourseTranscript(course_id=content.course_id, content_id=content.id, transcript_text=transcript_text)
             db.session.add(new_transcript)
-        
         db.session.commit()
         generate_and_store_embeddings(content_id, transcript_text)
-        return {"message": "Transcript extracted and stored successfully"} 
+        return {"message": "Transcript extracted and stored successfully"}
+    
     
 def schedule_grading_task(assignment_id, due_date):
     eta = due_date
@@ -299,6 +331,7 @@ class TokenBlacklist(db.Model):
     expires = db.Column(db.DateTime, nullable=False)
     blacklisted_on = db.Column(db.DateTime, default=datetime.utcnow)
 
+    
 def is_token_blacklisted(jti):
     return TokenBlacklist.query.filter_by(jti=jti).first() is not None
 
@@ -312,28 +345,6 @@ def check_if_token_is_revoked(jwt_header, jwt_payload):
 def revoked_token_response(jwt_header, jwt_payload):
     return jsonify({"msg": "Token has been revoked"}), 401
 
-
-@app.route('/open', methods=['GET'])
-def open():
-    courses = Course.query.all()
-    courses = [{"id": course.id, "name": course.name} for course in courses]
-    return jsonify({"message": "Anyone can view this page", "courses":courses}), 200  
-
-
-
-@app.route('/delete', methods=['DELETE'])
-@jwt_required()
-def delete():
-    data = request.get_json()
-    course_id = data.get('id')
-    user= User.query.get_or_404(get_jwt_identity())
-    if user.role != 'admin':
-        return jsonify({"error": "Unauthorized request denied."}), 403
-    db.session.query(CourseContent).filter(CourseContent.course_id == course_id).delete()  
-    db.session.query(Course).filter(Course.id == course_id).delete()
-    db.session.commit()
-    return jsonify({"message": "Course deleted successfully."}), 200
-  
 
 @app.route('/refresh', methods=['POST'])
 @jwt_required(refresh=True)
@@ -375,6 +386,7 @@ def is_valid_email(email):
 def is_valid_password(password):
     password_regex = r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$'
     return re.match(password_regex, password) is not None
+
 
 
 @app.route('/register', methods=['POST'])
@@ -555,6 +567,28 @@ def register_course():
     return jsonify({"message": "Course registration submitted successfully. Pending approval."}), 201
 
 
+@app.route('/delete_course/course/<int:course_id>', methods=['DELETE'])
+@jwt_required()
+def delete_course(course_id):
+    user_id = get_jwt_identity()
+    user = User.query.get_or_404(user_id)
+    if user.role != 'admin':
+        return jsonify({"error": "Unauthorized request. Only admin can delete entire course."}), 403
+    try:
+        course = db.session.get(Course, course_id)    
+        if not course:
+            return jsonify({"error": f"No course found with course id {course_id}."}), 404
+        contents = CourseContent.query.filter_by(course_id=course_id).all()
+        content_ids = [content.id for content in contents]
+        delete_embeddings.delay(content_ids, is_course_deletion=True)
+        db.session.delete(course)
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500    
+    return jsonify({"message": f"Course with course id {course_id} deleted successfully."}), 200
+
+
 @app.route('/add/new_course', methods=['POST'])
 @jwt_required()
 def add_new_course():
@@ -694,31 +728,24 @@ def upload_course_contents():
         return jsonify({"error": f"Error processing CSV file: {str(e)}"}), 500
     
     
-@app.route('/delete_course_content', methods=['DELETE'])
+@app.route('/delete_course_content/<int:content_id>', methods=['DELETE'])
 @jwt_required()
-def delete_course_content():
+def delete_course_content(content_id):
     user_id = get_jwt_identity()
     user = User.query.get_or_404(user_id)
     if user.role not in ['admin', 'support_staff']:
         return jsonify({"error": "Unauthorized request. Only admin or support staff can delete course content."}), 403
-    data = request.get_json()
-    course_id = data.get("course_id")
-    week = data.get("week")
-    title = data.get("title")
-    if not course_id or not week or not title:
-        return jsonify({"error": "course_id and week are required."}), 400
     try:
-        course_id = int(course_id)
-        week = int(week)
-        title = title.strip()
-    except ValueError:
-        return jsonify({"error": "course_id and week must be integers and title must be string."}), 400
-    content = CourseContent.query.filter_by(course_id=course_id, week=week, title=title).first()
-    if not content:
-        return jsonify({"error": f"No content found for Course ID {course_id}, Week {week}, Title {title}."}), 404
-    db.session.delete(content)
-    db.session.commit()
-    return jsonify({"message": f"Course content for Course ID {course_id}, Week {week}, Title {title} deleted successfully."}), 200
+        content = db.session.get(CourseContent, content_id)    
+        if not content:
+            return jsonify({"error": f"No content found with content id {content_id}."}), 404
+        db.session.delete(content)
+        db.session.commit()
+        delete_embeddings.delay([content_id])
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500    
+    return jsonify({"message": f"Course content with content id {content_id} deleted successfully."}), 200
 
 
 @app.route('/course_contents/<int:course_id>', methods=['GET'])
@@ -987,6 +1014,29 @@ def admin_dashboard():
     return jsonify({ "data": data, "courses": courses, "pendingApprovals": pendingApprovals, "pendingEnrollments": pendingEnrollments}), 200     
 
 
+@app.route('/delete', methods=['DELETE'])
+@jwt_required()
+def delete():
+    data = request.get_json()
+    course_id = data.get('id')
+    user= User.query.get_or_404(get_jwt_identity())
+    if user.role != 'admin':
+        return jsonify({"error": "Unauthorized request denied."}), 403
+    db.session.query(CourseContent).filter(CourseContent.course_id == course_id).delete()  
+    db.session.query(Course).filter(Course.id == course_id).delete()
+    db.session.commit()
+    return jsonify({"message": "Course deleted successfully."}), 200
+ 
+
+
+@app.route('/open', methods=['GET'])
+def open():
+    courses = Course.query.all()
+    courses = [{"id": course.id, "name": course.name} for course in courses]
+    return jsonify({"message": "Anyone can view this page", "courses":courses}), 200  
+
+
+
 @app.route('/dashboard/support_staff', methods=['GET'], endpoint="support_staff_dashboard")
 @jwt_required()
 def support_staff_dashboard():
@@ -1002,6 +1052,7 @@ def support_staff_dashboard():
     pendingEnrollments = db.session.query(User, Course).join(StudentEnrollment, User.id == StudentEnrollment.student_id).join(Course, Course.id == StudentEnrollment.course_id).filter(StudentEnrollment.approved == False, Course.id.in_(support_courses_ids)).all()
     pendingEnrollments = [{"student_id": student.id, "student_name": student.name, "student_email": student.email, "course_id": course.id, "course_name": course.name} for student, course in pendingEnrollments]
     return jsonify({"courses": courses, "support_courses": support_courses, "pendingEnrollments": pendingEnrollments}), 200
+
 
 
 @app.route('/dashboard/student', methods=['GET'], endpoint="student_dashboard")
@@ -1043,6 +1094,57 @@ def delete_session(session_id):
     return jsonify({"message": "Session deleted successfully!"}), 200
 
 
+def summarize_course_content(course_id, week=None):
+    course = Course.query.get(course_id)
+    if not course:
+        return "Course not found."
+    if week:
+        contents = CourseContent.query.filter_by(course_id=course_id, week=week).all()
+    else:
+        contents = CourseContent.query.filter_by(course_id=course_id).all()
+    if not contents:
+        return "No content found."
+    transcripts = []
+    for content in contents:
+        transcript = CourseTranscript.query.filter_by(content_id=content.id).first()
+        if transcript:
+            transcripts.append(transcript.transcript_text)
+    if not transcripts:
+        return "No transcripts available."
+    summary_prompt = f"""Summarize the following course content: {' '.join(transcripts)}"""
+    response = model.generate_content(summary_prompt)
+    return str(response.text)
+
+
+def classify_query(query):
+    """Classifies a query as course-related or general."""
+    # Keyword matching
+    course_keywords = [course.name.lower() for course in Course.query.all()]
+    if any(keyword in query.lower() for keyword in course_keywords):
+        return True
+    # Embedding similarity with individual content indexes
+    query_embedding = embed_model.encode([query])
+    for content in CourseContent.query.all():  # Iterate through all contents
+        content_id = content.id
+        faiss_index_path = f"{VECTOR_DB_PATH}/course_{content_id}.faiss"
+        id_map_path = f"{VECTOR_DB_PATH}/course_{content_id}_ids.json"
+        metadata_path = f"{VECTOR_DB_PATH}/course_{content_id}_metadata.json"
+        if os.path.exists(faiss_index_path) and os.path.exists(id_map_path) and os.path.exists(metadata_path):
+            index = faiss.read_index(faiss_index_path)
+            with open(id_map_path, "r") as f:
+                id_map = json.load(f)
+            with open(metadata_path, "r") as f:
+                metadata = json.load(f)
+            _, indices = index.search(query_embedding, 1)
+            if indices[0][0] != -1:
+                index_to_reconstruct = int(indices[0][0])
+                retrieved_chunk_embedding = index.reconstruct(index_to_reconstruct)
+                similarity = cosine_similarity(query_embedding, [retrieved_chunk_embedding])[0][0]
+                if similarity > 0.6:
+                    return True
+    return False
+
+
 @app.route('/chat', methods=['POST'])
 @jwt_required()
 def chat():
@@ -1051,81 +1153,159 @@ def chat():
     if user.role != 'student':
         return jsonify({"error": "Unauthorized request. Only students can access this path."}), 403
     data = request.json
-    session_id = data.get("session_id")    
+    session_id = data.get("session_id")
     session_data = []
     if not session_id:
         session_id = start_session(user.id) 
-        session = ChatSession.query.get_or_404(session_id)
-        session_data = [ {"id": session.id, "user_id": session.user_id, "created_at": session.created_at.strftime("%Y-%m-%d %H:%M:%S")} ]   
+    session = ChatSession.query.get_or_404(session_id)
+    session_data = [ {"id": session.id, "user_id": session.user_id, "created_at": session.created_at.strftime("%Y-%m-%d %H:%M:%S")} ]   
     query = data.get("message", "").strip()
     if not query:
         return jsonify({"error": "Message cannot be empty"}), 400
+
+    # Summarization requests
+    summary_match = re.search(r'Summarize the course "([^"]+)"(?: for week (\d+))?', query, re.IGNORECASE)
+    if summary_match:
+        course_name = summary_match.group(1)
+        week = summary_match.group(2)
+        course = Course.query.filter_by(name=course_name).first()
+        if not course:
+            return jsonify({"error": f"Course '{course_name}' not found."}), 404
+        if week:
+            contents = CourseContent.query.filter_by(course_id=course.id, week=week).all()
+        else:
+            contents = CourseContent.query.filter_by(course_id=course.id).all()
+        if not contents:
+            return jsonify({"error": f"Course Contents not found for the course '{course_name}'."}), 404
+        transcripts = []
+        for content in contents:
+            transcript = CourseTranscript.query.filter_by(content_id=content.id).first()
+            if transcript:
+                transcripts.append(transcript.transcript_text)
+        if not transcripts:
+            return jsonify({"error": f"Course Transcripts not found for the course '{course_name}'."}), 404
+        summary_prompt = f"""Summarize the following course content: {' '.join(transcripts)}"""
+        response = model.generate_content(summary_prompt)
+        response = str(response.text)
+        user_chat = ChatMessage(session_id=session_id, sender="user", message=query)
+        ai_chat = ChatMessage(session_id=session_id, sender="bot", message=response)
+        db.session.add_all([user_chat, ai_chat])
+        db.session.commit()
+        return jsonify({"response": response, "session": session_data}), 201
+
+    # Question generation requests
+    question_match = re.search(r'Generate(?: (\d+))? questions from the course "([^"]+)"(?: from week (\d+))?', query, re.IGNORECASE)
+    if question_match:
+        num_questions = question_match.group(1)
+        course_name = question_match.group(2)
+        week = question_match.group(3)
+        course = Course.query.filter_by(name=course_name).first()
+        if not course:
+            return jsonify({"error": f"Course '{course_name}' not found."}), 404
+        if week:
+            contents = CourseContent.query.filter_by(course_id=course.id, week=int(week)).all()
+        else:
+            contents = CourseContent.query.filter_by(course_id=course.id).all()
+
+        transcripts = []
+        for content in contents:
+            transcript = CourseTranscript.query.filter_by(content_id=content.id).first()
+            if transcript:
+                transcripts.append(transcript.transcript_text)
+        if not transcripts:
+            return jsonify({"error": "No transcripts available."}), 404
+
+        question_prompt = f"""Generate { num_questions if num_questions else "questions" } questions based on the course content: {' '.join(transcripts)}"""
+        response = model.generate_content(question_prompt)
+        response = str(response.text)
+        user_chat = ChatMessage(session_id=session_id, sender="user", message=query)
+        ai_chat = ChatMessage(session_id=session_id, sender="bot", message=response)
+        db.session.add_all([user_chat, ai_chat])
+        db.session.commit()
+        return jsonify({"response": response, "session": session_data}), 201
+    
+    context = ""
+    course_match = re.search(r'course "([^"]+)"', query, re.IGNORECASE)
+    week_match = re.search(r'week (\d+)', query, re.IGNORECASE)
+    course_name = course_match.group(1) if course_match else None
+    week = int(week_match.group(1)) if week_match else None
+    if course_name and week:
+        print(course_name, week)
+        course = Course.query.filter_by(name=course_name).first()
+        contents = [content.id for content in CourseContent.query.filter_by(course_id=course.id, week=week).all()]
+        transcripts = CourseTranscript.query.filter(CourseTranscript.content_id.in_(contents)).all()
+        context = "\n".join([transcript.transcript_text for transcript in transcripts])
+    
+    references = ""
+    is_course_related = classify_query(query)
+    if is_course_related and not context:        
+        query_embedding = embed_model.encode([query])
+        retrieved_chunks = []
+        max_chunks_per_content = 100
+        total_retrieved = 0
+        total_max_retrieved = 10
+        for content in CourseContent.query.all():
+            if total_retrieved >= total_max_retrieved:
+                break
+            content_id = content.id
+            faiss_index_path = f"{VECTOR_DB_PATH}/course_{content_id}.faiss"
+            id_map_path = f"{VECTOR_DB_PATH}/course_{content_id}_ids.json"
+            metadata_path = f"{VECTOR_DB_PATH}/course_{content_id}_metadata.json"
+
+            if os.path.exists(faiss_index_path) and os.path.exists(id_map_path) and os.path.exists(metadata_path):
+                index = faiss.read_index(faiss_index_path)
+                with open(id_map_path, "r") as f:
+                    id_map = json.load(f)
+                with open(metadata_path, "r") as f:
+                    metadata = json.load(f)
+                _, indices = index.search(query_embedding, max_chunks_per_content) # retrieve only top 1 chunk per content.
+                if indices[0][0] != -1:
+                    retrieved_chunks.append(metadata[id_map[indices[0][0]]])
+                    total_retrieved +=1
+                if total_retrieved >= total_max_retrieved:
+                        break
+        # Aggregate the retrieved chunks
+        if retrieved_chunks:
+            context = "\n".join([chunk["chunk"] for chunk in retrieved_chunks])
+            references = "\n".join([f"{chunk['course_name']}, Week {chunk['week']}" for chunk in retrieved_chunks])
+    
     chat_history = ChatMessage.query.filter_by(session_id=session_id).order_by(ChatMessage.timestamp.desc()).limit(10).all()
     chat_history.reverse()
     history_text = "\n".join([f"{msg.sender}: {msg.message}" for msg in chat_history])
 
-    course_contents = CourseContent.query.all()
-    relevant_texts = []
-    query_embedding = embed_model.encode([query])    
-    for content in course_contents:
-        faiss_index_path = f"{VECTOR_DB_PATH}/course_{content.id}.faiss"
-        id_map_path = f"{VECTOR_DB_PATH}/course_{content.id}_ids.npy"
-        if os.path.exists(faiss_index_path) and os.path.exists(id_map_path):
-            # Load FAISS index and stored ID mappings
-            index = faiss.read_index(faiss_index_path)
-            id_map = np.load(id_map_path).tolist()
-            _, indices = index.search(query_embedding, 3)  # Find 3 closest matches
-            for idx in indices[0]:  # Iterate over matched FAISS indices
-                if idx != -1 and idx < len(id_map):  # Ensure index is valid
-                    transcript_id = id_map[idx]  # Get the actual transcript ID
-                    transcript = CourseTranscript.query.get(transcript_id)
-                    if transcript:
-                        relevant_texts.append(transcript.transcript_text)
-        
-        if len(relevant_texts) >= 3:
-            break
-
-    if relevant_texts:
-        retrieved_context = " ".join(relevant_texts[:3])
-        use_ai_knowledge = False
-    else:
-        retrieved_context = "No relevant transcripts found."
-        use_ai_knowledge = True  # Enable AI knowledge fallback
-    try:
-        if use_ai_knowledge:
-            prompt = f"""
-                        The user has asked a question that is not found in the available course transcripts.
-                        Instead of giving a direct answer, guide the user by providing references, book names, 
-                        article titles, or online resources where they can explore further.
-
-                        **Past Chat History:**
-                        {history_text}
-
-                        **User Query:**
-                        {query}
-
-                        **Response Instructions:**
-                        - Do NOT provide a direct answer.
-                        - Suggest books, articles, research papers, or websites related to the topic.
-                        - If the question is general, suggest useful study techniques or how to approach the topic.
-
-                        Provide an informative and helpful response.
-                    """
-        else:
-            prompt = f"""
-                        You are an AI assistant. Use the following context to assist the user.
+    if context:
+        prompt = f"""
+                        You are an AI assistant. Provide short, indirect responses. Use the following context to guide your response.
 
                         **Past Chat History:**
                         {history_text}
 
                         **Relevant Course Content:**
-                        {retrieved_context}
+                        {context}
+
+                        **User Query:**
+                        {query}
+                        
+                        **References:** 
+                        {references}
+                        
+                        **Response:** 
+                        (Provide a short, indirect answer and include references)
+                    """
+    else:
+        prompt = f"""
+                        You are an AI assistant for general conversation.
+
+                        **Past Chat History:**
+                        {history_text}
 
                         **User Query:**
                         {query}
 
-                        Provide an informative response based on the course material.
+                        Provide a helpful and informative response.
                     """
+
+    try:
         response = model.generate_content(prompt)
     except Exception as e:
         print(e)
