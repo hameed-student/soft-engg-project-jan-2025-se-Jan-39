@@ -1,66 +1,112 @@
 
-# Project Setup and Instructions
+---
 
-## Installation and running Instructions
+# 🧪 Project Setup and Instructions
 
-### Step 1: Install Python
-Make sure you have Python installed on your system. You can download it from [python.org](https://www.python.org/downloads/).
+## 🚀 Installation and Running Instructions
 
-### Step 2: Create a Virtual Environment
-Navigate to your project directory and create a virtual environment using the following command:
+### ✅ Step 1: Install Python
+Make sure Python is installed on your system. You can download it from the official site:  
+👉 [https://www.python.org/downloads/](https://www.python.org/downloads/)
+
+---
+
+### ✅ Step 2: Create a Virtual Environment
+Navigate to your project directory and run:
 ```sh
 python -m venv venv
+```
 
-Step 3: Activate the Virtual Environment
-Activate the virtual environment using the command below:
+---
 
-On Windows:
+### ✅ Step 3: Activate the Virtual Environment
+
+**On Windows:**
+```sh
 .\venv\Scripts\activate
+```
 
-On macOS and Linux:
+**On macOS and Linux:**
+```sh
 source venv/bin/activate
+```
 
-Step 4: Install Required Libraries
-Install the required Python libraries by running:
+---
+
+### ✅ Step 4: Install Required Libraries
+Install project dependencies:
+```sh
 pip install -r backend/requirements.txt
+```
 
+---
 
-### **important** ###
-Step 5: Run the Application
-Start the application by running these commands inside the backend directory in the following order:
-flask db init
-flask db migrate
-flask db upgrade
-python admin.py
-python app.py
+### ⚠️ **Important**  
+### ✅ Step 5: Run the Application  
+Inside the project root directory, execute:
+```sh
+./run
+```
 
-Step 6: Access the Application
-Open your web browser and go to http://localhost:5000 to access the application.
-alternatively you can access via localhost:5173 after running npm run dev inside frontend directory
+---
 
-Additional Notes
-Ensure that you have the necessary permissions to install and run Python applications on your system.
-If you encounter any issues, refer to the documentation or seek help from the community.
+### ✅ Step 6: Access the Application
 
+- Open [http://localhost:5000](http://localhost:5000)
+- Alternatively, you can run the frontend by navigating to the `frontend` directory and using:
+  ```sh
+  npm run dev
+  ```
+  Then open [http://localhost:5173](http://localhost:5173)
 
-## User Login Details
-You can login to 3 types of users using the details below:
-- **Admin**
-  - Email: admin@app.com
-  - Password: Pass@123
-  - Role: admin
-- **Student**
-  - Email: student@app.com
-  - Password: Pass@123
-  - Role: student
-- **Support Staff**
-  - Email: support@app.com
-  - Password: Pass@123
-  - Role: support staff
+---
 
-Alternatively, you can also register as a new student or support staff.
+## 👥 User Login Details
 
-## User Roles and Permissions
-- **Admins**: Can add new courses, approve new course enrollments and support staff, and view course contents. In future updates, they will be able to add course contents.
-- **Support Staff**: Can approve enrollments of students into courses, view course contents, and apply for other courses as support staff. In future updates, they will be able to update their profile.
-- **Students**: Can view course contents and enroll in new courses. In future updates, they will be able to chat with AI using the bottom right chat icon.
+You can use the following credentials to log in:
+
+### 🔐 Admin
+- **Email:** `admin@app.com`  
+- **Password:** `Pass@123`  
+- **Role:** `admin`
+
+### 🎓 Student
+- **Email:** `student@app.com`  
+- **Password:** `Pass@123`  
+- **Role:** `student`
+
+### 🛠️ Support Staff
+- **Email:** `support@app.com`  
+- **Password:** `Pass@123`  
+- **Role:** `support staff`
+
+You can also register as a new **student** or **support staff** from the app.
+
+---
+
+## 🔑 User Roles and Permissions
+
+### 👑 Admin
+- Add new courses
+- Approve course enrollments and support staff
+- View course contents
+- *(Coming soon: Add course content)*
+
+### 🛠️ Support Staff
+- Approve student enrollments
+- View course contents
+- Apply for other courses as support staff
+- *(Coming soon: Update profile)*
+
+### 🎓 Students
+- View course contents
+- Enroll in new courses
+- *(Coming soon: Chat with AI support)*
+
+---
+
+## 📌 Additional Notes
+- Ensure you have permission to install and run Python applications.
+- For issues, refer to project documentation or seek help from the community.
+
+--- 
